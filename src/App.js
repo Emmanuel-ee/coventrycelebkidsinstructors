@@ -1,4 +1,5 @@
 import React from 'react';
+import { QRCodeCanvas } from 'qrcode.react';
 import './App.css';
 import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
 
@@ -36,12 +37,22 @@ const mapChildFromDb = (child) => ({
   id: child.id,
   name: child.name || '',
   age: child.age || '',
+  dateOfBirth: child.date_of_birth || child.dateOfBirth || '',
+  sex: child.sex || child.gender || '',
   guardianName: child.guardian_name || child.guardianName || child.guardian || '',
   guardianContact: child.guardian_contact || child.guardianContact || '',
+  allergies: child.allergies || '',
   classCategory: child.class_category || child.classCategory || '',
   teacherId: child.teacher_id || child.teacherId || '',
   lastStatus: child.last_status || child.lastStatus || '',
   lastActionAt: child.last_action_at || child.lastActionAt || '',
+  signedIn: typeof child.signed_in === 'boolean' ? child.signed_in : child.signedIn || false,
+  signedInUserId: child.signed_in_user_id || child.signedInUserId || '',
+  allowPhotos:
+    typeof child.allow_photos === 'boolean'
+      ? child.allow_photos
+      : child.allowPhotos || false,
+  qrCode: child.qr_code || child.qrCode || '',
   notes: child.notes || '',
   createdAt: child.created_at || child.createdAt || new Date().toISOString(),
 });
@@ -63,6 +74,8 @@ function App() {
   const [error, setError] = React.useState('');
   const [supabaseStatus, setSupabaseStatus] = React.useState('');
   const [view, setView] = React.useState('list');
+  const [selectedChild, setSelectedChild] = React.useState(null);
+  const [isUpdatingChildStatus, setIsUpdatingChildStatus] = React.useState(false);
   const [teacherForm, setTeacherForm] = React.useState({
     name: '',
     email: '',
@@ -123,6 +136,79 @@ function App() {
   const handleTeacherChange = (event) => {
     const { name, value } = event.target;
     setTeacherForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleSelectChild = (child) => {
+    setSelectedChild(child);
+    setView('child');
+  };
+
+  const handleBackToList = () => {
+    setSelectedChild(null);
+    setView('list');
+  };
+
+  const handleChildCheckin = async (action) => {
+    if (!selectedChild) {
+      return;
+    }
+    setError('');
+    setSupabaseStatus('');
+    setIsUpdatingChildStatus(true);
+    const actionTimestamp = new Date().toISOString();
+    const updatedChild = {
+      ...selectedChild,
+      lastStatus: action,
+      lastActionAt: actionTimestamp,
+      signedIn: action === 'sign_in',
+      signedInUserId: action === 'sign_in' ? selectedChild.signedInUserId || '' : '',
+    };
+
+    if (isSupabaseEnabled) {
+      const { error: checkinError } = await supabase
+        .from('checkins')
+        .insert([
+          {
+            id: createId(),
+            child_id: selectedChild.id,
+            action,
+            created_at: actionTimestamp,
+          },
+        ]);
+      if (checkinError) {
+        setError(`Unable to ${action === 'sign_in' ? 'sign in' : 'sign out'}. ${checkinError.message}`);
+        setIsUpdatingChildStatus(false);
+        return;
+      }
+      const { error: statusError } = await supabase
+        .from('children')
+        .update({
+          last_status: action,
+          last_action_at: actionTimestamp,
+          signed_in: action === 'sign_in',
+          signed_in_user_id: action === 'sign_in' ? selectedChild.signedInUserId || null : null,
+        })
+        .eq('id', selectedChild.id);
+      if (statusError) {
+        setError(
+          `Signed ${action === 'sign_in' ? 'in' : 'out'}, but status update failed. ${statusError.message}`
+        );
+        setIsUpdatingChildStatus(false);
+        return;
+      }
+      setSupabaseStatus(
+        `${selectedChild.name} ${action === 'sign_in' ? 'signed in' : 'signed out'} successfully.`
+      );
+    }
+
+    setRecords((prev) => ({
+      ...prev,
+      children: prev.children.map((child) =>
+        child.id === selectedChild.id ? updatedChild : child
+      ),
+    }));
+    setSelectedChild(updatedChild);
+    setIsUpdatingChildStatus(false);
   };
 
 
@@ -207,6 +293,10 @@ function App() {
     acc[teacher.id] = teacher.name;
     return acc;
   }, {});
+
+  const qrCodeValue = selectedChild
+    ? `${window.location.origin}${process.env.PUBLIC_URL || ''}/?scan=${selectedChild.qrCode || selectedChild.id}`
+    : '';
 
   const registerInstructorForm = (
     <form className="form" onSubmit={handleAddTeacher}>
@@ -372,12 +462,94 @@ function App() {
                           </span>
                         </div>
                       </div>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => handleSelectChild(child)}
+                      >
+                        View details
+                      </button>
                     </article>
                   ))
                 )}
               </div>
             </section>
           </>
+        ) : view === 'child' && selectedChild ? (
+          <section className="panel">
+            <div className="panel__heading">
+              <h2>{selectedChild.name}</h2>
+              <div className="panel__actions">
+                <button type="button" className="ghost" onClick={handleBackToList}>
+                  Back to list
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={isUpdatingChildStatus}
+                  onClick={() => handleChildCheckin('sign_in')}
+                >
+                  Sign in
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={isUpdatingChildStatus}
+                  onClick={() => handleChildCheckin('sign_out')}
+                >
+                  Sign out
+                </button>
+              </div>
+            </div>
+
+            <div className="card card--stack">
+              <div className="card__title">
+                <h3>Child details</h3>
+                {selectedChild.age && <span className="badge">Age {selectedChild.age}</span>}
+              </div>
+              <div className="meta">
+                <span>Class: {selectedChild.classCategory || 'Unassigned'}</span>
+                <span>Assigned: {teacherLookup[selectedChild.teacherId] || 'Unassigned'}</span>
+                <span>Guardian: {selectedChild.guardianName || 'No guardian listed'}</span>
+                <span>Contact: {selectedChild.guardianContact || 'No contact listed'}</span>
+                <span>Sex: {selectedChild.sex || 'Not specified'}</span>
+                <span>Date of birth: {selectedChild.dateOfBirth || 'Not provided'}</span>
+                <span>Allergies: {selectedChild.allergies || 'None listed'}</span>
+                <span>
+                  Photos allowed: {selectedChild.allowPhotos ? 'Yes' : 'No'}
+                </span>
+                <span>Notes: {selectedChild.notes || 'No notes'}</span>
+                <span>
+                  Status:{' '}
+                  {selectedChild.lastStatus
+                    ? selectedChild.lastStatus === 'sign_in'
+                      ? 'Signed in'
+                      : 'Signed out'
+                    : 'No check-ins yet'}
+                </span>
+                <span>
+                  Last action:{' '}
+                  {selectedChild.lastActionAt
+                    ? new Date(selectedChild.lastActionAt).toLocaleString()
+                    : '—'}
+                </span>
+              </div>
+            </div>
+
+            <div className="card card--stack">
+              <div className="card__title">
+                <h3>QR code</h3>
+              </div>
+              {qrCodeValue ? (
+                <div className="qr-code">
+                  <QRCodeCanvas value={qrCodeValue} size={180} includeMargin />
+                  <p className="muted">Scan to open child record.</p>
+                </div>
+              ) : (
+                <p className="muted">No QR code available.</p>
+              )}
+            </div>
+          </section>
         ) : (
           <section className="panel">
             <div className="panel__heading">

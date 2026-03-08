@@ -168,6 +168,11 @@ textarea {
   background: #fcfcff;
 }
 
+.card--stack {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
 .card h3 {
   margin: 0;
 }
@@ -192,6 +197,17 @@ textarea {
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 0.75rem;
+}
+
+.qr-code {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  width: 100%;
+  padding: 12px;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px dashed #e0e4f3;
 }
 
 .ghost {
