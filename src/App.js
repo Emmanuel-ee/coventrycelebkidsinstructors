@@ -62,6 +62,7 @@ function App() {
   const [isLoading, setIsLoading] = React.useState(isSupabaseEnabled);
   const [error, setError] = React.useState('');
   const [supabaseStatus, setSupabaseStatus] = React.useState('');
+  const [view, setView] = React.useState('list');
   const [teacherForm, setTeacherForm] = React.useState({
     name: '',
     email: '',
@@ -156,6 +157,7 @@ function App() {
       teachers: [newTeacher, ...prev.teachers],
     }));
     setTeacherForm({ name: '', email: '', phone: '', role: 'Lead Teacher' });
+    setView('list');
   };
 
 
@@ -206,12 +208,60 @@ function App() {
     return acc;
   }, {});
 
+  const registerInstructorForm = (
+    <form className="form" onSubmit={handleAddTeacher}>
+      <div className="form__grid">
+        <label>
+          Name*
+          <input
+            name="name"
+            value={teacherForm.name}
+            onChange={handleTeacherChange}
+            placeholder="Instructor name"
+            required
+          />
+        </label>
+        <label>
+          Role
+          <select name="role" value={teacherForm.role} onChange={handleTeacherChange}>
+            <option>Lead Teacher</option>
+            <option>Assistant</option>
+            <option>Support</option>
+            <option>Volunteer</option>
+          </select>
+        </label>
+        <label>
+          Email
+          <input
+            name="email"
+            type="email"
+            value={teacherForm.email}
+            onChange={handleTeacherChange}
+            placeholder="teacher@email.com"
+          />
+        </label>
+        <label>
+          Phone
+          <input
+            name="phone"
+            value={teacherForm.phone}
+            onChange={handleTeacherChange}
+            placeholder="(555) 123-4567"
+          />
+        </label>
+      </div>
+      <button type="submit" className="primary">
+        Register instructor
+      </button>
+    </form>
+  );
+
   return (
     <div className="app">
       <header className="app__header">
         <div>
           <p className="app__eyebrow">Coventry CelebKids</p>
-          <h1>Instructor &amp; Child Records</h1>
+          <h1>Celeb Kids Instructors</h1>
           <p className="app__subtitle">
             Keep track of your classroom roster, guardians, and instructor assignments.
           </p>
@@ -229,152 +279,116 @@ function App() {
       </header>
 
       <div className="app__status">
-        {isSupabaseEnabled ? (
-          <p className="banner banner--success">Supabase connected</p>
-        ) : (
-          <p className="banner banner--warning">
-            Local mode: {supabaseConfigMessage || 'add Supabase keys in `.env.local` to sync across devices.'}
-          </p>
-        )}
         {isLoading && <p className="banner banner--info">Syncing records…</p>}
         {supabaseStatus && <p className="banner banner--info">{supabaseStatus}</p>}
         {error && <p className="banner banner--error">{error}</p>}
       </div>
 
       <main className="app__main">
-        <section className="panel">
-          <div className="panel__heading">
-            <h2>Instructors</h2>
-            <input
-              className="search"
-              type="search"
-              placeholder="Search instructors"
-              value={teacherSearch}
-              onChange={(event) => setTeacherSearch(event.target.value)}
-            />
-          </div>
-
-          <form className="form" onSubmit={handleAddTeacher}>
-            <div className="form__grid">
-              <label>
-                Name*
-                <input
-                  name="name"
-                  value={teacherForm.name}
-                  onChange={handleTeacherChange}
-                  placeholder="Teacher name"
-                  required
-                />
-              </label>
-              <label>
-                Role
-                <select name="role" value={teacherForm.role} onChange={handleTeacherChange}>
-                  <option>Lead Teacher</option>
-                  <option>Assistant</option>
-                  <option>Support</option>
-                  <option>Volunteer</option>
-                </select>
-              </label>
-              <label>
-                Email
-                <input
-                  name="email"
-                  type="email"
-                  value={teacherForm.email}
-                  onChange={handleTeacherChange}
-                  placeholder="teacher@email.com"
-                />
-              </label>
-              <label>
-                Phone
-                <input
-                  name="phone"
-                  value={teacherForm.phone}
-                  onChange={handleTeacherChange}
-                  placeholder="(555) 123-4567"
-                />
-              </label>
-            </div>
-            <button type="submit" className="primary">
-              Register instructor
-            </button>
-          </form>
-
-          <div className="list">
-            {filteredTeachers.length === 0 ? (
-              <p className="empty">No instructors yet. Add your first instructor above.</p>
-            ) : (
-              filteredTeachers.map((teacher) => (
-                <article key={teacher.id} className="card">
-                  <div>
-                    <h3>{teacher.name}</h3>
-                    <p className="muted">{teacher.role}</p>
-                    <div className="meta">
-                      <span>{teacher.email || 'No email'}</span>
-                      <span>{teacher.phone || 'No phone'}</span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => handleDeleteTeacher(teacher.id)}
-                  >
-                    Remove
+        {view === 'list' ? (
+          <>
+            <section className="panel">
+              <div className="panel__heading">
+                <h2>Instructors</h2>
+                <div className="panel__actions">
+                  <input
+                    className="search"
+                    type="search"
+                    placeholder="Search instructors"
+                    value={teacherSearch}
+                    onChange={(event) => setTeacherSearch(event.target.value)}
+                  />
+                  <button type="button" className="ghost" onClick={() => setView('register')}>
+                    Register instructor
                   </button>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
+                </div>
+              </div>
 
-        <section className="panel">
-          <div className="panel__heading">
-            <h2>Registered children</h2>
-            <input
-              className="search"
-              type="search"
-              placeholder="Search children"
-              value={childSearch}
-              onChange={(event) => setChildSearch(event.target.value)}
-            />
-          </div>
+              <div className="list">
+                {filteredTeachers.length === 0 ? (
+                  <p className="empty">No instructors yet. Add your first instructor above.</p>
+                ) : (
+                  filteredTeachers.map((teacher) => (
+                    <article key={teacher.id} className="card">
+                      <div>
+                        <h3>{teacher.name}</h3>
+                        <p className="muted">{teacher.role}</p>
+                        <div className="meta">
+                          <span>{teacher.email || 'No email'}</span>
+                          <span>{teacher.phone || 'No phone'}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => handleDeleteTeacher(teacher.id)}
+                      >
+                        Remove
+                      </button>
+                    </article>
+                  ))
+                )}
+              </div>
+            </section>
 
-          <div className="list">
-            {filteredChildren.length === 0 ? (
-              <p className="empty">No children yet. Register children in the main app.</p>
-            ) : (
-              filteredChildren.map((child) => (
-                <article key={child.id} className="card">
-                  <div>
-                    <div className="card__title">
-                      <h3>{child.name}</h3>
-                      {child.age && <span className="badge">Age {child.age}</span>}
-                    </div>
-                    <p className="muted">
-                      Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}
-                      {child.classCategory ? ` • ${child.classCategory}` : ''}
-                    </p>
-                    <div className="meta">
-                      <span>{child.guardianName || 'No guardian listed'}</span>
-                      <span>{child.guardianContact || 'No contact listed'}</span>
-                      <span>{child.notes || 'No notes'}</span>
-                      <span>
-                        {child.lastStatus
-                          ? `Last ${child.lastStatus === 'sign_in' ? 'signed in' : 'signed out'}`
-                          : 'No check-ins yet'}
-                      </span>
-                      <span>
-                        {child.lastActionAt
-                          ? new Date(child.lastActionAt).toLocaleString()
-                          : ''}
-                      </span>
-                    </div>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
+            <section className="panel">
+              <div className="panel__heading">
+                <h2>Registered children</h2>
+                <input
+                  className="search"
+                  type="search"
+                  placeholder="Search children"
+                  value={childSearch}
+                  onChange={(event) => setChildSearch(event.target.value)}
+                />
+              </div>
+
+              <div className="list">
+                {filteredChildren.length === 0 ? (
+                  <p className="empty">No children yet. Register children in the main app.</p>
+                ) : (
+                  filteredChildren.map((child) => (
+                    <article key={child.id} className="card">
+                      <div>
+                        <div className="card__title">
+                          <h3>{child.name}</h3>
+                          {child.age && <span className="badge">Age {child.age}</span>}
+                        </div>
+                        <p className="muted">
+                          Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}
+                          {child.classCategory ? ` • ${child.classCategory}` : ''}
+                        </p>
+                        <div className="meta">
+                          <span>{child.guardianName || 'No guardian listed'}</span>
+                          <span>{child.guardianContact || 'No contact listed'}</span>
+                          <span>{child.notes || 'No notes'}</span>
+                          <span>
+                            {child.lastStatus
+                              ? `Last ${child.lastStatus === 'sign_in' ? 'signed in' : 'signed out'}`
+                              : 'No check-ins yet'}
+                          </span>
+                          <span>
+                            {child.lastActionAt ? new Date(child.lastActionAt).toLocaleString() : ''}
+                          </span>
+                        </div>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </section>
+          </>
+        ) : (
+          <section className="panel">
+            <div className="panel__heading">
+              <h2>Register instructor</h2>
+              <button type="button" className="ghost" onClick={() => setView('list')}>
+                Back to list
+              </button>
+            </div>
+            {registerInstructorForm}
+          </section>
+        )}
       </main>
     </div>
   );

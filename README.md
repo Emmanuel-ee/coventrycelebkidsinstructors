@@ -1,4 +1,4 @@
-# Coventry CelebKids — Teacher & Child Records
+# Coventry CelebKids — Instructor & Child Records
 
 This app helps children’s instructors keep a clear record of every instructor and child in the program. It supports:
 
@@ -29,8 +29,8 @@ npm test -- --watchAll=false
 
 ## Supabase setup (recommended)
 
-1. Create a new Supabase project.
-2. In the SQL editor, run the schema below.
+1. Use the same Supabase project as the main `coventrycelebkids` app.
+2. Ensure the `teachers` table exists (the children table comes from the main app).
 3. Copy your **Project URL** and **anon public key** into a `.env.local` file.
 
 ```sql
@@ -43,19 +43,7 @@ create table if not exists teachers (
 	created_at timestamptz default now()
 );
 
-create table if not exists children (
-	id text primary key,
-	name text not null,
-	age text,
-	guardian_name text,
-	guardian_contact text,
-	class_category text,
-	teacher_id text references teachers (id) on delete set null,
-	last_status text,
-	last_action_at timestamptz,
-	notes text,
-	created_at timestamptz default now()
-);
+-- The `children` table is created/managed in the main coventrycelebkids app.
 ```
 
 Create `.env.local` (or copy from `.env.example`):
@@ -76,8 +64,8 @@ alter table children enable row level security;
 create policy "Allow all teachers" on teachers
 	for all using (true) with check (true);
 
-create policy "Allow all children" on children
-	for all using (true) with check (true);
+-- Children policies are defined in the main app. Ensure the children table policies
+-- allow reads and updates if you want to assign instructors in this app.
 ```
 
 ## Notes

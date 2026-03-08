@@ -79,6 +79,13 @@
   margin-bottom: 16px;
 }
 
+.panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
 .panel h2 {
   margin: 0;
 }
