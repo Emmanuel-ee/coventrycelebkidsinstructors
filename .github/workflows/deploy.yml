@@ -29,14 +29,12 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: coventrycelebkidsinstructors/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        working-directory: coventrycelebkidsinstructors
         run: npm ci
 
       - name: Validate Supabase secrets
-        working-directory: coventrycelebkidsinstructors
         run: |
           if [ -z "$REACT_APP_SUPABASE_URL" ] || [ -z "$REACT_APP_SUPABASE_ANON_KEY" ]; then
             echo "Missing Supabase secrets. Add REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_ANON_KEY in GitHub Actions secrets." >&2
@@ -47,7 +45,6 @@ jobs:
           REACT_APP_SUPABASE_ANON_KEY: ${{ secrets.REACT_APP_SUPABASE_ANON_KEY }}
 
       - name: Build
-        working-directory: coventrycelebkidsinstructors
         env:
           REACT_APP_SUPABASE_URL: ${{ secrets.REACT_APP_SUPABASE_URL }}
           REACT_APP_SUPABASE_ANON_KEY: ${{ secrets.REACT_APP_SUPABASE_ANON_KEY }}
@@ -60,7 +57,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: coventrycelebkidsinstructors/build
+          path: ./build
 
   deploy:
     runs-on: ubuntu-latest
