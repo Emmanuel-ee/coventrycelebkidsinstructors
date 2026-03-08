@@ -1,6 +1,6 @@
 import React from 'react';
 import './App.css';
-import { isSupabaseEnabled, supabase, supabaseConfigMessage } from './lib/supabaseClient';
+import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
 
 const STORAGE_KEY = 'celebkids-records-v1';
 const EMPTY_RECORDS = { teachers: [], children: [] };
