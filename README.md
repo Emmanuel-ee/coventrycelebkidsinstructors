@@ -1,70 +1,92 @@
-# Getting Started with Create React App
+# Coventry CelebKids — Teacher & Child Records
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+This app helps children’s instructors keep a clear record of every instructor and child in the program. It supports:
 
-## Available Scripts
+- Quick add/search for instructors with roles and contact details.
+- Child records with guardians, notes, and assigned instructors.
+- Automatic saving to the browser (localStorage) so records persist between visits.
 
-In the project directory, you can run:
+## How it works
 
-### `npm start`
+1. Register instructors in the **Instructors** panel.
+2. Review children in the **Registered children** panel.
+3. Use search boxes to filter by name.
+4. Remove instructors when needed (children tied to a removed instructor become unassigned).
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## Run locally
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+```bash
+npm start
+```
 
-### `npm test`
+Then open [http://localhost:3000](http://localhost:3000).
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## Tests
 
-### `npm run build`
+```bash
+npm test -- --watchAll=false
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+## Supabase setup (recommended)
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+1. Create a new Supabase project.
+2. In the SQL editor, run the schema below.
+3. Copy your **Project URL** and **anon public key** into a `.env.local` file.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+```sql
+create table if not exists teachers (
+	id text primary key,
+	name text not null,
+	email text,
+	phone text,
+	role text,
+	created_at timestamptz default now()
+);
 
-### `npm run eject`
+create table if not exists children (
+	id text primary key,
+	name text not null,
+	age text,
+	guardian_name text,
+	guardian_contact text,
+	class_category text,
+	teacher_id text references teachers (id) on delete set null,
+	last_status text,
+	last_action_at timestamptz,
+	notes text,
+	created_at timestamptz default now()
+);
+```
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+Create `.env.local` (or copy from `.env.example`):
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+```bash
+REACT_APP_SUPABASE_URL=your-project-url
+REACT_APP_SUPABASE_ANON_KEY=your-anon-key
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+Restart the dev server after adding the env variables.
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+If you enable Row Level Security, add policies that allow your app to read and write:
 
-## Learn More
+```sql
+alter table teachers enable row level security;
+alter table children enable row level security;
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+create policy "Allow all teachers" on teachers
+	for all using (true) with check (true);
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+create policy "Allow all children" on children
+	for all using (true) with check (true);
+```
 
-### Code Splitting
+## Notes
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+- If Supabase env keys are missing, the app uses localStorage (`celebkids-records-v1`).
+- With Supabase configured, all records sync across devices.
 
-### Analyzing the Bundle Size
+## Troubleshooting
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+- If nothing saves to Supabase, confirm you created `.env.local` (not just `.env.example`) and restarted the dev server.
+- If you see `permission denied` errors, enable the Row Level Security policies shown above.
+- The app now surfaces Supabase error messages in the banner so you can see why a request failed.
