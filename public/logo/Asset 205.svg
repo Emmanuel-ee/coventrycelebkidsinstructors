@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 505.95 89.15">
+  <defs>
+    <style>
+      .cls-1 {
+        font-family: Lato-Black, Lato;
+        font-size: 33.7px;
+      }
+
+      .cls-2 {
+        font-weight: 800;
+      }
+
+      .cls-2, .cls-3 {
+        fill: #fff;
+      }
+
+      .cls-4 {
+        font-family: Lato-BlackItalic, Lato;
+        font-size: 26.29px;
+        font-style: italic;
+      }
+
+      .cls-5 {
+        letter-spacing: -.08em;
+      }
+
+      .cls-6 {
+        letter-spacing: -.02em;
+      }
+
+      .cls-7 {
+        letter-spacing: .02em;
+      }
+
+      .cls-8 {
+        letter-spacing: .05em;
+      }
+    </style>
+  </defs>
+  <g id="Layer_1-2" data-name="Layer_1">
+    <g>
+      <g>
+        <path class="cls-3" d="M166.88,19.64c-40.74-39.5-63.74-11.72-90.16,22.84-11.5,15.05-27.84,26.94-38.82,25.08-42.89-4.74-16.03-87.33,34.89-27.45l10.73-13.27c-4.34-5.11-7.67-8.44-11.9-12.02C19.81-28.97-21.4,36.25,12.14,73.47c10.93,11.35,28.03,12.54,40.91,7.76,24.47-9.07,38.95-37.45,57.24-54.65,20.5-21.86,40.34-2.5,53.62,15.44l10.86-13.27c-1.79-2.2-4.16-5.49-7.9-9.11Z"/>
+        <path class="cls-3" d="M263.66,38.4C261.26,18.31,247.88,1.37,224.51,0c-7.23-.12-23.28,7.89-28.07,12.49-15.08,11.52-27.25,33.44-40.99,45.42-28.67,24.99-37.13,18.15-57.57-10.78l-11.24,13.2c20.73,30.64,47.78,39,75.97,14.6,18.02-13.98,40.02-56.1,61.78-56.11,20.11,0,30.58,25.84,19.89,39.98-17.44,19.47-39.71,3.38-53.08-10.68l-11.06,13.67c10.98,9.51,23.78,21.16,42.23,23.12,26.57,3.36,44.48-19.45,41.29-46.51Z"/>
+      </g>
+      <text class="cls-2" transform="translate(278.17 30.08)"><tspan class="cls-1"><tspan x="0" y="0">CELEBR</tspan><tspan class="cls-5" x="122.23" y="0">A</tspan><tspan x="144.37" y="0">TION</tspan></tspan><tspan class="cls-1"><tspan x="0" y="28">CHU</tspan><tspan class="cls-6" x="72.08" y="28">R</tspan><tspan x="93.65" y="28">CH</tspan></tspan><tspan class="cls-4"><tspan class="cls-8" x="0" y="52">C</tspan><tspan class="cls-7" x="16.85" y="52">O</tspan><tspan class="cls-8" x="36.62" y="52">VENTRY</tspan></tspan></text>
+    </g>
+  </g>
+</svg>

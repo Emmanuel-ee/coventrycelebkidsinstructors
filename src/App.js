@@ -350,8 +350,16 @@ function App() {
     <div className="app">
       <header className="app__header">
         <div>
-          <p className="app__eyebrow">Coventry CelebKids</p>
-          <h1>Celeb Kids Instructors</h1>
+          <div className="app__brand">
+            <img
+              src={`${process.env.PUBLIC_URL}/logo/Asset%20203.svg`}
+              alt="Coventry CelebKids"
+              className="app__logo"
+            />
+            <div>
+              <h1>Coventry CelebKids Instructors</h1>
+            </div>
+          </div>
           <p className="app__subtitle">
             Keep track of your classroom roster, guardians, and instructor assignments.
           </p>

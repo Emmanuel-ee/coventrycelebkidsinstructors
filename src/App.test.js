@@ -3,7 +3,7 @@ import App from './App';
 
 test('renders instructor list heading and register flow', () => {
   render(<App />);
-  const heading = screen.getByText(/Celeb Kids Instructors/i);
+  const heading = screen.getByText(/Coventry CelebKids Instructors/i);
   expect(heading).toBeInTheDocument();
 
   const registerButton = screen.getByRole('button', { name: /register instructor/i });
