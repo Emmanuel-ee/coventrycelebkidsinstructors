@@ -1,4 +1,5 @@
 import React from 'react';
+import Login from './Login';
 import { QRCodeCanvas } from 'qrcode.react';
 import './App.css';
 import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
@@ -31,6 +32,8 @@ const mapTeacherFromDb = (teacher) => ({
   phone: teacher.phone || '',
   role: teacher.role || 'Lead Teacher',
   createdAt: teacher.created_at || teacher.createdAt || new Date().toISOString(),
+  verified: teacher.verified === true || teacher.verified === 1 || teacher.verified === 'true',
+  password: teacher.password || '',
 });
 
 const mapChildFromDb = (child) => ({
@@ -64,9 +67,87 @@ const mapTeacherToDb = (teacher) => ({
   phone: teacher.phone || null,
   role: teacher.role,
   created_at: teacher.createdAt,
+  verified: typeof teacher.verified === 'boolean' ? teacher.verified : false,
 });
 
 function App() {
+  // Handler to download attendance as CSV
+  const handleDownloadAttendance = async () => {
+    setError('');
+    setSupabaseStatus('');
+    try {
+      // Fetch all checkins from Supabase
+      const { data: checkins, error: checkinsError } = await supabase
+        .from('checkins')
+        .select('*')
+        .order('created_at', { ascending: true });
+      if (checkinsError) {
+        setError('Failed to fetch attendance records.');
+        return;
+      }
+      // Fetch all children for lookup
+      const { data: children, error: childrenError } = await supabase
+        .from('children')
+        .select('*');
+      if (childrenError) {
+        setError('Failed to fetch children records.');
+        return;
+      }
+      // Build a map of childId to child info
+      const childMap = {};
+      children.forEach((child) => {
+        childMap[child.id] = child;
+      });
+      // For each child, find their first sign_in and last sign_out
+      const attendance = {};
+      checkins.forEach((entry) => {
+        if (!attendance[entry.child_id]) {
+          attendance[entry.child_id] = { signIn: null, signOut: null };
+        }
+        if (entry.action === 'sign_in') {
+          if (!attendance[entry.child_id].signIn) {
+            attendance[entry.child_id].signIn = entry.created_at;
+          }
+        } else if (entry.action === 'sign_out') {
+          attendance[entry.child_id].signOut = entry.created_at;
+        }
+      });
+      // Prepare CSV rows
+      const rows = [
+        ['Name', 'Guardian', 'Class', 'Sign In Time', 'Sign Out Time'],
+      ];
+      Object.keys(attendance).forEach((childId) => {
+        const child = childMap[childId];
+        if (!child) return;
+        rows.push([
+          child.name || '',
+          child.guardian_name || child.guardianName || '',
+          child.class_category || child.classCategory || '',
+          attendance[childId].signIn ? new Date(attendance[childId].signIn).toLocaleString() : '',
+          attendance[childId].signOut ? new Date(attendance[childId].signOut).toLocaleString() : '',
+        ]);
+      });
+      // Convert to CSV string
+      const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+      // Trigger download
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `attendance_${new Date().toISOString().slice(0,10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setSupabaseStatus('Attendance CSV downloaded.');
+    } catch (err) {
+      setError('An error occurred while downloading attendance.');
+    }
+  };
+  // Skip login: always set a dummy instructor
+  const [currentInstructor, setCurrentInstructor] = React.useState({ name: 'Demo Instructor', role: 'Lead Teacher', email: 'demo@celebkids.com', verified: true });
+  // Handler for Lead Instructor to verify a teacher (simulate email link click)
+  const [pendingVerification, setPendingVerification] = React.useState(false);
   const [records, setRecords] = React.useState(() =>
     isSupabaseEnabled ? EMPTY_RECORDS : loadLocalRecords()
   );
@@ -81,6 +162,8 @@ function App() {
     email: '',
     phone: '',
     role: 'Lead Teacher',
+    password: '',
+    password2: '',
   });
   const [teacherSearch, setTeacherSearch] = React.useState('');
   const [childSearch, setChildSearch] = React.useState('');
@@ -215,6 +298,19 @@ function App() {
   const handleAddTeacher = async (event) => {
     event.preventDefault();
     if (!teacherForm.name.trim()) {
+      setError('Name is required.');
+      return;
+    }
+    if (!teacherForm.email.trim()) {
+      setError('Email is required for verification.');
+      return;
+    }
+    if (!teacherForm.password || teacherForm.password.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    if (teacherForm.password !== teacherForm.password2) {
+      setError('Passwords do not match.');
       return;
     }
     const newTeacher = {
@@ -223,7 +319,9 @@ function App() {
       email: teacherForm.email.trim(),
       phone: teacherForm.phone.trim(),
       role: teacherForm.role,
+      password: teacherForm.password,
       createdAt: new Date().toISOString(),
+      verified: false,
     };
     if (isSupabaseEnabled) {
       setError('');
@@ -235,14 +333,14 @@ function App() {
         setError(`Unable to save teacher. ${insertError.message}`);
         return;
       }
-      setSupabaseStatus('Teacher saved to Supabase.');
+      setSupabaseStatus('Registration submitted. Awaiting Lead Instructor email verification.');
     }
-
     setRecords((prev) => ({
       ...prev,
       teachers: [newTeacher, ...prev.teachers],
     }));
-    setTeacherForm({ name: '', email: '', phone: '', role: 'Lead Teacher' });
+    setTeacherForm({ name: '', email: '', phone: '', role: 'Lead Teacher', password: '', password2: '' });
+    setPendingVerification(true);
     setView('list');
   };
 
@@ -282,9 +380,9 @@ function App() {
   };
 
 
-  const filteredTeachers = records.teachers.filter((teacher) =>
-    teacher.name.toLowerCase().includes(teacherSearch.toLowerCase())
-  );
+  // Removed unused filteredTeachers
+  const pendingTeachers = records.teachers.filter((t) => !t.verified);
+  const verifiedTeachers = records.teachers.filter((t) => t.verified);
   const filteredChildren = records.children.filter((child) =>
     child.name.toLowerCase().includes(childSearch.toLowerCase())
   );
@@ -321,13 +419,14 @@ function App() {
           </select>
         </label>
         <label>
-          Email
+          Email*
           <input
             name="email"
             type="email"
             value={teacherForm.email}
             onChange={handleTeacherChange}
             placeholder="teacher@email.com"
+            required
           />
         </label>
         <label>
@@ -339,13 +438,83 @@ function App() {
             placeholder="(555) 123-4567"
           />
         </label>
+        <label>
+          Password*
+          <input
+            name="password"
+            type="password"
+            value={teacherForm.password}
+            onChange={handleTeacherChange}
+            placeholder="Create a password"
+            required
+            minLength={6}
+          />
+        </label>
+        <label>
+          Confirm Password*
+          <input
+            name="password2"
+            type="password"
+            value={teacherForm.password2}
+            onChange={handleTeacherChange}
+            placeholder="Re-enter your password"
+            required
+            minLength={6}
+          />
+        </label>
       </div>
       <button type="submit" className="primary">
         Register instructor
       </button>
+      {pendingVerification && (
+        <p className="muted">Registration submitted. Awaiting Lead Instructor email verification.</p>
+      )}
     </form>
   );
 
+  // Handler for Lead Instructor to verify a teacher (simulate email link click)
+  const handleVerifyTeacher = async (teacherId) => {
+    if (isSupabaseEnabled) {
+      const { error: updateError } = await supabase
+        .from('teachers')
+        .update({ verified: true })
+        .eq('id', teacherId);
+      if (updateError) {
+        setError(`Unable to verify instructor. ${updateError.message}`);
+        return;
+      }
+    }
+    setRecords((prev) => ({
+      ...prev,
+      teachers: prev.teachers.map((t) =>
+        t.id === teacherId ? { ...t, verified: true } : t
+      ),
+    }));
+    setSupabaseStatus('Instructor verified.');
+  };
+
+  // Login handler (now username/password)
+  const handleLogin = (username, password) => {
+    setError('');
+    const found = records.teachers.find(
+      (t) => t.name.trim().toLowerCase() === username.trim().toLowerCase() && t.verified
+    );
+    if (!found) {
+      setError('No verified instructor found with that username.');
+      return;
+    }
+    if (!found.password || found.password !== password) {
+      setError('Incorrect password.');
+      return;
+    }
+    setCurrentInstructor(found);
+  };
+
+  // if (!currentInstructor) {
+  //   return <Login onLogin={handleLogin} error={error} />;
+  // }
+
+  // All activities after login are done in the instructor's name
   return (
     <div className="app">
       <header className="app__header">
@@ -358,6 +527,10 @@ function App() {
             />
             <div>
               <h1>Coventry CelebKids Instructors</h1>
+              <div style={{ fontSize: '1rem', color: '#4859f0', marginTop: 4 }}>
+                Signed in as: <b>{currentInstructor.name}</b>
+                <button className="ghost" style={{ marginLeft: 12 }} onClick={() => setCurrentInstructor(null)}>Logout</button>
+              </div>
             </div>
           </div>
           <p className="app__subtitle">
@@ -403,10 +576,10 @@ function App() {
               </div>
 
               <div className="list">
-                {filteredTeachers.length === 0 ? (
-                  <p className="empty">No instructors yet. Add your first instructor above.</p>
+                {verifiedTeachers.length === 0 ? (
+                  <p className="empty">No verified instructors yet. Add your first instructor above.</p>
                 ) : (
-                  filteredTeachers.map((teacher) => (
+                  verifiedTeachers.map((teacher) => (
                     <article key={teacher.id} className="card">
                       <div>
                         <h3>{teacher.name}</h3>
@@ -427,18 +600,56 @@ function App() {
                   ))
                 )}
               </div>
+              <div className="panel__sublist">
+                <h3>Pending Instructor Verifications</h3>
+                {pendingTeachers.length === 0 ? (
+                  <p className="empty">No pending verifications.</p>
+                ) : (
+                  pendingTeachers.map((teacher) => (
+                    <article key={teacher.id} className="card">
+                      <div>
+                        <h4>{teacher.name}</h4>
+                        <p className="muted">{teacher.role}</p>
+                        <span>{teacher.email}</span>
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={() => handleVerifyTeacher(teacher.id)}
+                        >
+                          Verify
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
             </section>
 
             <section className="panel">
+
+
               <div className="panel__heading">
                 <h2>Registered children</h2>
-                <input
-                  className="search"
-                  type="search"
-                  placeholder="Search children"
-                  value={childSearch}
-                  onChange={(event) => setChildSearch(event.target.value)}
-                />
+                <div className="panel__actions">
+                  <input
+                    className="search"
+                    type="search"
+                    placeholder="Search children"
+                    value={childSearch}
+                    onChange={(event) => setChildSearch(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="primary" 
+                    style={{ fontWeight: 'bold', fontSize: '1.1rem', background: '#4859f0', color: '#fff', borderRadius: 6, boxShadow: '0 2px 8px #4859f033', padding: '0.6em 1.4em', display: 'flex', alignItems: 'center', gap: 8 }}
+                    onClick={handleDownloadAttendance}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ marginRight: 6 }}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+                    </svg>
+                    Download Attendance
+                  </button>
+                </div>
               </div>
 
               <div className="list">
