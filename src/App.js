@@ -1,5 +1,4 @@
 import React from 'react';
-import Login from './Login';
 import { QRCodeCanvas } from 'qrcode.react';
 import './App.css';
 import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
@@ -494,21 +493,6 @@ function App() {
   };
 
   // Login handler (now username/password)
-  const handleLogin = (username, password) => {
-    setError('');
-    const found = records.teachers.find(
-      (t) => t.name.trim().toLowerCase() === username.trim().toLowerCase() && t.verified
-    );
-    if (!found) {
-      setError('No verified instructor found with that username.');
-      return;
-    }
-    if (!found.password || found.password !== password) {
-      setError('Incorrect password.');
-      return;
-    }
-    setCurrentInstructor(found);
-  };
 
   // if (!currentInstructor) {
   //   return <Login onLogin={handleLogin} error={error} />;
