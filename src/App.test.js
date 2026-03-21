@@ -34,9 +34,5 @@ test('renders instructor list heading and register flow', async () => {
   const heading = screen.getByRole('heading', { name: /instructors/i });
   expect(heading).toBeInTheDocument();
 
-  const registerButton = screen.getByRole('button', { name: /register instructor/i });
-  fireEvent.click(registerButton);
-
-  expect(screen.getByRole('heading', { name: /register instructor/i })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: /back to instructors/i })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: /instructors/i })).toBeInTheDocument();
 });

@@ -18,6 +18,11 @@
   display: flex;
   gap: 14px;
   align-items: center;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
 }
 
 .app__logo {
@@ -322,6 +327,48 @@ textarea {
   color: #3d4ba8;
 }
 
+.banner--signedin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  background: #ffffff;
+  border: 1px solid #e0e6ff;
+  color: #1b1d2a;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+}
+
+.signedin__content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.signedin__label {
+  margin: 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: #7d839c;
+}
+
+.signedin__name {
+  margin: 2px 0 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.signedin__role {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: #5a5f75;
+}
+
+.signedin__action {
+  white-space: nowrap;
+}
+
 .banner--warning {
   background: #fff4d6;
   color: #946200;
@@ -340,6 +387,44 @@ textarea {
 .banner--info {
   background: #e9f2ff;
   color: #2b5db5;
+}
+
+.modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 50;
+}
+
+.modal {
+  width: min(480px, 100%);
+  background: #ffffff;
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.modal__header h2 {
+  margin: 0;
+}
+
+.modal__body {
+  margin: 0;
+  color: #5a5f75;
+  font-size: 0.95rem;
+}
+
+.modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 @media (max-width: 640px) {
@@ -372,6 +457,15 @@ textarea {
   .card {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .banner--signedin {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .signedin__action {
+    align-self: flex-start;
   }
 }
 

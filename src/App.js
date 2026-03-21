@@ -5,6 +5,7 @@ import './App.css';
 import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
 
 const STORAGE_KEY = 'celebkids-records-v1';
+const SIGNED_IN_KEY = 'celebkids-instructor-id';
 const EMPTY_RECORDS = { teachers: [], children: [] };
 const INSTRUCTOR_PHOTOS_BUCKET =
   process.env.REACT_APP_INSTRUCTOR_PHOTOS_BUCKET || 'instructor-photos';
@@ -32,7 +33,7 @@ const mapTeacherFromDb = (teacher) => ({
   name: teacher.name || '',
   email: teacher.email || '',
   phone: teacher.phone || '',
-  role: teacher.role || 'Lead Teacher',
+  role: teacher.role || 'Instructor',
   createdAt: teacher.created_at || teacher.createdAt || new Date().toISOString(),
   verified: teacher.verified === true || teacher.verified === 1 || teacher.verified === 'true',
   passwordHash: teacher.password_hash || teacher.password || '',
@@ -75,6 +76,11 @@ const mapTeacherToDb = (teacher) => ({
   photo_url: teacher.photoUrl || null,
 });
 
+const isUuid = (value) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
+
 function App() {
   const attendanceActive = true;
   const [pendingVerification, setPendingVerification] = React.useState(false);
@@ -93,9 +99,16 @@ function App() {
     name: '',
     email: '',
     phone: '',
-    role: 'Lead Teacher',
+    role: 'Instructor',
     password: '',
     password2: '',
+    photoFile: null,
+  });
+  const [profileForm, setProfileForm] = React.useState({
+    name: '',
+    email: '',
+    phone: '',
+    role: 'Instructor',
     photoFile: null,
   });
   const [loginForm, setLoginForm] = React.useState({
@@ -108,12 +121,59 @@ function App() {
     confirmPassword: '',
   });
   const [childSearch, setChildSearch] = React.useState('');
+  const [deletePrompt, setDeletePrompt] = React.useState({
+    isOpen: false,
+    teacherId: '',
+    teacherName: '',
+  });
 
   React.useEffect(() => {
     if (!isSupabaseEnabled) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
     }
   }, [records]);
+
+  React.useEffect(() => {
+    if (currentInstructor?.id) {
+      localStorage.setItem(SIGNED_IN_KEY, currentInstructor.id);
+    }
+  }, [currentInstructor]);
+
+  React.useEffect(() => {
+    if (!supabaseStatus) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => {
+      setSupabaseStatus('');
+    }, 4000);
+    return () => window.clearTimeout(timeout);
+  }, [supabaseStatus]);
+
+  React.useEffect(() => {
+    if (!error) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => {
+      setError('');
+    }, 4000);
+    return () => window.clearTimeout(timeout);
+  }, [error]);
+
+  React.useEffect(() => {
+    setError('');
+  }, [view]);
+
+  React.useEffect(() => {
+    if (selectedTeacher && currentInstructor?.id === selectedTeacher.id) {
+      setProfileForm({
+        name: selectedTeacher.name || '',
+        email: selectedTeacher.email || '',
+        phone: selectedTeacher.phone || '',
+        role: selectedTeacher.role || 'Instructor',
+        photoFile: null,
+      });
+    }
+  }, [selectedTeacher, currentInstructor]);
 
   React.useEffect(() => {
     if (!isSupabaseEnabled) {
@@ -146,6 +206,18 @@ function App() {
         teachers: (teachersResponse.data || []).map(mapTeacherFromDb),
         children: (childrenResponse.data || []).map(mapChildFromDb),
       });
+      const storedId = localStorage.getItem(SIGNED_IN_KEY);
+      if (storedId) {
+        const matched = (teachersResponse.data || [])
+          .map(mapTeacherFromDb)
+          .find((teacher) => teacher.id === storedId);
+        if (matched) {
+          setCurrentInstructor(matched);
+          setView('home');
+        } else {
+          localStorage.removeItem(SIGNED_IN_KEY);
+        }
+      }
       setIsLoading(false);
     };
 
@@ -180,6 +252,22 @@ function App() {
     }));
   };
 
+  const handleProfileFormChange = (event) => {
+    const { name, value, files, type } = event.target;
+    setProfileForm((prev) => ({
+      ...prev,
+      [name]: type === 'file' ? files?.[0] || null : value,
+    }));
+  };
+
+  const setStatusWithActor = (message) => {
+    if (currentInstructor?.name) {
+      setSupabaseStatus(`${currentInstructor.name}: ${message}`);
+    } else {
+      setSupabaseStatus(message);
+    }
+  };
+
   const handleLogin = async (event) => {
     event.preventDefault();
     setError('');
@@ -189,9 +277,30 @@ function App() {
       setError('Email and password are required.');
       return;
     }
-    const instructor = records.teachers.find(
+    let instructor = records.teachers.find(
       (teacher) => teacher.email?.toLowerCase() === email
     );
+    if (!instructor && isSupabaseEnabled) {
+      const { data, error: fetchError } = await supabase
+        .from('teachers')
+        .select('*')
+        .ilike('email', email)
+        .limit(1)
+        .maybeSingle();
+      if (fetchError) {
+        setError(`Unable to verify instructor. ${fetchError.message}`);
+        return;
+      }
+      if (data) {
+        instructor = mapTeacherFromDb(data);
+        setRecords((prev) => ({
+          ...prev,
+          teachers: prev.teachers.some((t) => t.id === instructor.id)
+            ? prev.teachers
+            : [instructor, ...prev.teachers],
+        }));
+      }
+    }
     if (!instructor) {
       setError('No instructor found with that email.');
       return;
@@ -209,8 +318,15 @@ function App() {
       return;
     }
     setCurrentInstructor(instructor);
+    localStorage.setItem(SIGNED_IN_KEY, instructor.id);
     setLoginForm({ email: '', password: '' });
     setView('home');
+  };
+
+  const handleSignOut = () => {
+    setCurrentInstructor(null);
+    localStorage.removeItem(SIGNED_IN_KEY);
+    setView('login');
   };
 
   const handlePasswordUpdate = async (event) => {
@@ -264,7 +380,90 @@ function App() {
     }));
     setCurrentInstructor((prev) => (prev ? { ...prev, passwordHash: nextHash } : prev));
     setPasswordForm({ currentPassword: '', nextPassword: '', confirmPassword: '' });
-    setSupabaseStatus('Password updated.');
+    setStatusWithActor('Password updated.');
+  };
+
+  const handleProfileUpdate = async (event) => {
+    event.preventDefault();
+    if (!currentInstructor) {
+      return;
+    }
+    const trimmedName = profileForm.name.trim();
+    const trimmedEmail = profileForm.email.trim();
+    if (!trimmedName) {
+      setError('Name is required.');
+      return;
+    }
+    if (!trimmedEmail) {
+      setError('Email is required.');
+      return;
+    }
+    setError('');
+    setSupabaseStatus('');
+
+    const updatedTeacher = {
+      ...currentInstructor,
+      name: trimmedName,
+      email: trimmedEmail,
+      phone: profileForm.phone.trim(),
+      role: profileForm.role || currentInstructor.role,
+      photoUrl: currentInstructor.photoUrl || '',
+    };
+
+    if (isSupabaseEnabled) {
+      if (profileForm.photoFile) {
+        const fileExt = profileForm.photoFile.name.split('.').pop();
+        const filePath = `instructors/${currentInstructor.id}.${fileExt}`;
+        const { error: uploadError } = await supabase.storage
+          .from(INSTRUCTOR_PHOTOS_BUCKET)
+          .upload(filePath, profileForm.photoFile, {
+            upsert: true,
+            contentType: profileForm.photoFile.type,
+          });
+        if (uploadError) {
+          setError(
+            `Unable to upload photo. ${uploadError.message} (Bucket: ${INSTRUCTOR_PHOTOS_BUCKET})`
+          );
+          return;
+        }
+        const { data: publicData } = supabase
+          .storage
+          .from(INSTRUCTOR_PHOTOS_BUCKET)
+          .getPublicUrl(filePath);
+        updatedTeacher.photoUrl = publicData?.publicUrl || '';
+      }
+
+      const { error: updateError } = await supabase
+        .from('teachers')
+        .update({
+          name: updatedTeacher.name,
+          email: updatedTeacher.email,
+          phone: updatedTeacher.phone || null,
+          role: updatedTeacher.role,
+          photo_url: updatedTeacher.photoUrl || null,
+        })
+        .eq('id', currentInstructor.id);
+      if (updateError) {
+        setError(`Unable to update profile. ${updateError.message}`);
+        return;
+      }
+    }
+
+    setRecords((prev) => ({
+      ...prev,
+      teachers: prev.teachers.map((teacher) =>
+        teacher.id === currentInstructor.id ? { ...teacher, ...updatedTeacher } : teacher
+      ),
+    }));
+    setCurrentInstructor(updatedTeacher);
+    if (selectedTeacher?.id === currentInstructor.id) {
+      setSelectedTeacher(updatedTeacher);
+    }
+    setProfileForm((prev) => ({
+      ...prev,
+      photoFile: null,
+    }));
+    setStatusWithActor('Profile updated.');
   };
 
   const openChild = (child) => {
@@ -315,6 +514,10 @@ function App() {
     setView('instructors');
   };
 
+  const handleBackToInstructorDetails = () => {
+    setView('instructor');
+  };
+
   const handleBackToChildren = () => {
     setSelectedChild(null);
     setView('children');
@@ -337,7 +540,9 @@ function App() {
       lastStatus: action,
       lastActionAt: actionTimestamp,
       signedIn: action === 'sign_in',
-      signedInUserId: action === 'sign_in' ? selectedChild.signedInUserId || '' : '',
+      signedInUserId: action === 'sign_in'
+        ? currentInstructor?.id || selectedChild.signedInUserId || ''
+        : '',
     };
 
     if (isSupabaseEnabled) {
@@ -362,7 +567,8 @@ function App() {
           last_status: action,
           last_action_at: actionTimestamp,
           signed_in: action === 'sign_in',
-          signed_in_user_id: action === 'sign_in' ? selectedChild.signedInUserId || null : null,
+          signed_in_user_id:
+            action === 'sign_in' ? currentInstructor?.id || null : null,
         })
         .eq('id', selectedChild.id);
       if (statusError) {
@@ -372,7 +578,7 @@ function App() {
         setIsUpdatingChildStatus(false);
         return;
       }
-      setSupabaseStatus(
+      setStatusWithActor(
         `${selectedChild.name} ${action === 'sign_in' ? 'signed in' : 'signed out'} successfully.`
       );
     }
@@ -405,11 +611,21 @@ function App() {
       setError('Passwords do not match.');
       return;
     }
+    const normalizedEmail = teacherForm.email.trim().toLowerCase();
+    const existingInstructor = records.teachers.find(
+      (teacher) => teacher.email?.toLowerCase() === normalizedEmail
+    );
+    if (existingInstructor) {
+      setError(
+        'This instructor has already been registered. Please contact your Lead Instructor for approval or sign in.'
+      );
+      return;
+    }
     const passwordHash = await bcrypt.hash(teacherForm.password, 10);
     const newTeacher = {
       id: createId(),
       name: teacherForm.name.trim(),
-      email: teacherForm.email.trim(),
+  email: teacherForm.email.trim(),
       phone: teacherForm.phone.trim(),
       role: teacherForm.role,
       passwordHash,
@@ -420,6 +636,21 @@ function App() {
     if (isSupabaseEnabled) {
       setError('');
       setSupabaseStatus('');
+      const { data: existingData, error: existingError } = await supabase
+        .from('teachers')
+        .select('id')
+        .ilike('email', normalizedEmail)
+        .limit(1);
+      if (existingError) {
+        setError(`Unable to verify instructor. ${existingError.message}`);
+        return;
+      }
+      if (existingData && existingData.length > 0) {
+        setError(
+          'This instructor has already been registered. Please contact your Lead Instructor for approval or sign in.'
+        );
+        return;
+      }
       if (teacherForm.photoFile) {
         const fileExt = teacherForm.photoFile.name.split('.').pop();
         const filePath = `instructors/${newTeacher.id}.${fileExt}`;
@@ -449,7 +680,7 @@ function App() {
         setError(`Unable to save teacher. ${insertError.message}`);
         return;
       }
-      setSupabaseStatus('Registration submitted. Awaiting Lead Instructor email verification.');
+      setStatusWithActor('Registration submitted. Awaiting Lead Instructor email verification.');
     }
     setRecords((prev) => ({
       ...prev,
@@ -459,7 +690,7 @@ function App() {
       name: '',
       email: '',
       phone: '',
-      role: 'Lead Teacher',
+      role: 'Instructor',
       password: '',
       password2: '',
       photoFile: null,
@@ -469,29 +700,210 @@ function App() {
   };
 
   const handleDeleteTeacher = async (teacherId) => {
-    if (!window.confirm('Remove this teacher? Children assigned will become unassigned.')) {
+    if (!isLeadInstructor) {
+      setError('Only Lead Instructors can remove instructors.');
       return;
     }
+    const teacher = records.teachers.find((item) => item.id === teacherId);
+    setDeletePrompt({
+      isOpen: true,
+      teacherId,
+      teacherName: teacher?.name || 'this instructor',
+    });
+  };
+
+  const closeDeletePrompt = () => {
+    setDeletePrompt({ isOpen: false, teacherId: '', teacherName: '' });
+  };
+
+  const confirmDeleteTeacher = async () => {
+    const teacherId = deletePrompt.teacherId;
+    if (!teacherId) {
+      closeDeletePrompt();
+      return;
+    }
+    closeDeletePrompt();
     if (isSupabaseEnabled) {
       setError('');
       setSupabaseStatus('');
-      const { error: childUpdateError } = await supabase
-        .from('children')
-        .update({ teacher_id: null })
-        .eq('teacher_id', teacherId);
-      if (childUpdateError) {
-        setError(`Unable to update children for this teacher. ${childUpdateError.message}`);
+      const teacherToRemove =
+        records.teachers.find((teacher) => teacher.id === teacherId) ||
+        (selectedTeacher?.id === teacherId ? selectedTeacher : null);
+      const clearChildAssignments = async () => {
+        if (isUuid(teacherId)) {
+          const { error: childUpdateError } = await supabase
+            .from('children')
+            .update({ teacher_id: null })
+            .eq('teacher_id', teacherId);
+          if (childUpdateError) {
+            const message = childUpdateError.message || '';
+            if (!message.includes('teacher_id')) {
+              setError(
+                `Unable to update children for this teacher. ${childUpdateError.message}`
+              );
+              return false;
+            }
+          }
+        }
+
+        const { error: camelCaseError } = await supabase
+          .from('children')
+          .update({ teacherId: null })
+          .eq('teacherId', teacherId);
+        if (camelCaseError) {
+          const camelMessage = camelCaseError.message || '';
+          if (camelMessage.includes('teacherid')) {
+            const { error: lowerCaseError } = await supabase
+              .from('children')
+              .update({ teacherid: null })
+              .eq('teacherid', teacherId);
+            if (lowerCaseError) {
+              setError(
+                `Unable to update children for this teacher. ${lowerCaseError.message}`
+              );
+              return false;
+            }
+          } else if (!camelMessage.includes('teacherId')) {
+            setError(
+              `Unable to update children for this teacher. ${camelCaseError.message}`
+            );
+            return false;
+          }
+        }
+
+        if (teacherToRemove?.email) {
+          const { error: emailChildError } = await supabase
+            .from('children')
+            .update({ teacher_email: null })
+            .eq('teacher_email', teacherToRemove.email);
+          if (emailChildError) {
+            const emailMessage = emailChildError.message || '';
+            if (!emailMessage.includes('teacher_email')) {
+              const { error: camelEmailError } = await supabase
+                .from('children')
+                .update({ teacherEmail: null })
+                .eq('teacherEmail', teacherToRemove.email);
+              if (camelEmailError) {
+                const camelEmailMessage = camelEmailError.message || '';
+                if (camelEmailMessage.includes('teacheremail')) {
+                  const { error: lowerEmailError } = await supabase
+                    .from('children')
+                    .update({ teacheremail: null })
+                    .eq('teacheremail', teacherToRemove.email);
+                  if (lowerEmailError) {
+                    setError(
+                      `Unable to update children for this teacher. ${lowerEmailError.message}`
+                    );
+                    return false;
+                  }
+                } else if (!camelEmailMessage.includes('teacherEmail')) {
+                  setError(
+                    `Unable to update children for this teacher. ${camelEmailError.message}`
+                  );
+                  return false;
+                }
+              }
+            }
+          }
+        }
+
+        return true;
+      };
+
+      const removeInstructorPhoto = async () => {
+        if (!teacherToRemove?.photoUrl) {
+          return true;
+        }
+        const pathMatch = teacherToRemove.photoUrl.match(/\/instructors\/[^?]+/);
+        const storagePath = pathMatch ? pathMatch[0].replace('/instructors/', '') : null;
+        if (!storagePath) {
+          return true;
+        }
+        const { error: photoDeleteError } = await supabase
+          .storage
+          .from(INSTRUCTOR_PHOTOS_BUCKET)
+          .remove([`instructors/${storagePath}`]);
+        if (photoDeleteError) {
+          setError(`Unable to remove instructor photo. ${photoDeleteError.message}`);
+          return false;
+        }
+        return true;
+      };
+
+      const resolveDeleteEmail = async () => {
+        if (!teacherToRemove?.email) {
+          setError('Unable to remove teacher. Missing instructor email.');
+          return null;
+        }
+        const normalizedEmail = teacherToRemove.email.trim().toLowerCase();
+        let matchResponse = await supabase
+          .from('teachers')
+          .select('email')
+          .ilike('email', normalizedEmail)
+          .limit(1);
+        if (matchResponse.error) {
+          setError(
+            `Unable to remove teacher (${normalizedEmail}). ${matchResponse.error.message}`
+          );
+          return null;
+        }
+        if (!matchResponse.data || matchResponse.data.length === 0) {
+          matchResponse = await supabase
+            .from('teachers')
+            .select('email')
+            .ilike('email', `${normalizedEmail}%`)
+            .limit(1);
+        }
+        const matchEmail = matchResponse.data?.[0]?.email;
+        if (!matchEmail) {
+          const { data: emailList } = await supabase
+            .from('teachers')
+            .select('email')
+            .limit(5);
+          const sampleEmails = (emailList || [])
+            .map((item) => item.email)
+            .filter(Boolean)
+            .join(', ');
+          setError(
+            `Unable to remove teacher (${normalizedEmail}). No database record matched that email.${
+              sampleEmails ? ` Sample emails: ${sampleEmails}` : ''
+            }`
+          );
+          return null;
+        }
+        return matchEmail;
+      };
+
+      const clearedChildren = await clearChildAssignments();
+      if (!clearedChildren) {
         return;
       }
-      const { error: deleteError } = await supabase
+      const removedPhoto = await removeInstructorPhoto();
+      if (!removedPhoto) {
+        return;
+      }
+      const matchEmail = await resolveDeleteEmail();
+      if (!matchEmail) {
+        return;
+      }
+      const deleteResponse = await supabase
         .from('teachers')
         .delete()
-        .eq('id', teacherId);
-      if (deleteError) {
-        setError(`Unable to remove teacher. ${deleteError.message}`);
+        .eq('email', matchEmail)
+        .select('email');
+      if (deleteResponse.error) {
+        setError(
+          `Unable to remove teacher (${matchEmail}). ${deleteResponse.error.message}`
+        );
         return;
       }
-      setSupabaseStatus('Teacher removed from Supabase.');
+      if ((deleteResponse.data || []).length === 0) {
+        setError(
+          `Unable to remove teacher (${matchEmail}). No database record matched that email.`
+        );
+        return;
+      }
+      setStatusWithActor('Instructor removed from Supabase.');
     }
     setRecords((prev) => ({
       ...prev,
@@ -500,6 +912,10 @@ function App() {
         child.teacherId === teacherId ? { ...child, teacherId: '' } : child
       ),
     }));
+    if (selectedTeacher?.id === teacherId) {
+      setSelectedTeacher(null);
+      setView('instructors');
+    }
     if (currentInstructor?.id === teacherId) {
       setCurrentInstructor(null);
       setView('login');
@@ -527,7 +943,7 @@ function App() {
         t.id === teacherId ? { ...t, verified: true } : t
       ),
     }));
-    setSupabaseStatus('Instructor verified.');
+    setStatusWithActor('Instructor verified.');
   };
 
   const pendingTeachers = records.teachers.filter((teacher) => !teacher.verified);
@@ -542,6 +958,8 @@ function App() {
       }
       return (a.name || '').localeCompare(b.name || '');
     });
+
+  const isLeadInstructor = currentInstructor?.role?.toLowerCase().includes('lead');
 
   const filteredChildren = records.children.filter((child) => {
     if (!childSearch.trim()) {
@@ -659,8 +1077,33 @@ function App() {
 
   return (
     <div className="app">
+      {deletePrompt.isOpen && (
+        <div className="modal__backdrop" role="presentation">
+          <div className="modal" role="dialog" aria-modal="true">
+            <div className="modal__header">
+              <h2>Remove instructor</h2>
+            </div>
+            <p className="modal__body">
+              Remove {deletePrompt.teacherName}? Children assigned will become unassigned.
+            </p>
+            <div className="modal__actions">
+              <button type="button" className="ghost" onClick={closeDeletePrompt}>
+                Cancel
+              </button>
+              <button type="button" className="primary" onClick={confirmDeleteTeacher}>
+                Yes, remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <header className="app__header">
-        <div className="app__brand">
+        <button
+          type="button"
+          className="app__brand"
+          onClick={() => setView('home')}
+          aria-label="Go to home"
+        >
           <img
             className="app__logo"
             src={`${process.env.PUBLIC_URL}/logo/Asset 199.svg`}
@@ -671,7 +1114,7 @@ function App() {
             <h1>Instructor Dashboard</h1>
             <p className="app__subtitle">In Christ For Christ With Joy</p>
           </div>
-        </div>
+        </button>
         <div className="app__stats">
           <div>
             <span className="stat__label">Verified instructors</span>
@@ -685,6 +1128,23 @@ function App() {
       </header>
 
       <div className="app__status">
+        {currentInstructor && (
+          <div className="banner banner--signedin">
+            <div className="signedin__content">
+              {renderTeacherAvatar(currentInstructor, 40)}
+              <div>
+                <p className="signedin__label">Signed in</p>
+                <p className="signedin__name">{currentInstructor.name}</p>
+                <p className="signedin__role">
+                  {currentInstructor.role || 'Instructor'}
+                </p>
+              </div>
+            </div>
+            <button type="button" className="ghost signedin__action" onClick={handleSignOut}>
+              Sign out
+            </button>
+          </div>
+        )}
         {isLoading && <p className="banner banner--info">Loading records…</p>}
         {error && <p className="banner banner--error">{error}</p>}
         {!error && supabaseStatus && <p className="banner banner--success">{supabaseStatus}</p>}
@@ -789,14 +1249,32 @@ function App() {
               <button type="button" className="ghost" onClick={handleBackToInstructors}>
                 Back to instructors
               </button>
-              {!selectedTeacher.verified && (
+              {currentInstructor?.id === selectedTeacher.id && (
                 <button
                   type="button"
-                  className="primary"
-                  onClick={() => handleVerifyTeacher(selectedTeacher.id)}
+                  className="ghost"
+                  onClick={() => setView('profile')}
                 >
-                  Verify instructor
+                  Update profile
                 </button>
+              )}
+              {!selectedTeacher.verified && isLeadInstructor && (
+                <>
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => handleVerifyTeacher(selectedTeacher.id)}
+                  >
+                    Verify instructor
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => handleDeleteTeacher(selectedTeacher.id)}
+                  >
+                    Deny registration
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -839,50 +1317,119 @@ function App() {
               ))
             )}
           </div>
-          {currentInstructor?.id === selectedTeacher.id && (
-            <div className="panel__sublist">
-              <h3>Change password</h3>
-              <form className="form" onSubmit={handlePasswordUpdate}>
-                <div className="form__grid">
-                  <label>
-                    Current password
-                    <input
-                      name="currentPassword"
-                      type="password"
-                      value={passwordForm.currentPassword}
-                      onChange={handlePasswordFormChange}
-                      required
-                    />
-                  </label>
-                  <label>
-                    New password
-                    <input
-                      name="nextPassword"
-                      type="password"
-                      value={passwordForm.nextPassword}
-                      onChange={handlePasswordFormChange}
-                      required
-                      minLength={6}
-                    />
-                  </label>
-                  <label>
-                    Confirm new password
-                    <input
-                      name="confirmPassword"
-                      type="password"
-                      value={passwordForm.confirmPassword}
-                      onChange={handlePasswordFormChange}
-                      required
-                      minLength={6}
-                    />
-                  </label>
-                </div>
-                <button type="submit" className="primary">
-                  Update password
-                </button>
-              </form>
+        </section>
+      ) : activeView === 'profile' && selectedTeacher && currentInstructor?.id === selectedTeacher.id ? (
+        <section className="panel panel--register">
+          <div className="panel__heading">
+            <div>
+              <h2>Update profile</h2>
+              <p className="panel__intro">Edit your contact details, role, or photo.</p>
             </div>
-          )}
+            <button type="button" className="ghost" onClick={handleBackToInstructorDetails}>
+              Back to details
+            </button>
+          </div>
+          <div className="panel__sublist">
+            <form className="form" onSubmit={handleProfileUpdate}>
+              <div className="form__grid">
+                <label>
+                  Name*
+                  <input
+                    name="name"
+                    value={profileForm.name}
+                    onChange={handleProfileFormChange}
+                    required
+                  />
+                </label>
+                <label>
+                  Role
+                  <select
+                    name="role"
+                    value={profileForm.role}
+                    onChange={handleProfileFormChange}
+                    disabled={isLeadInstructor}
+                  >
+                    <option>Lead Instructor</option>
+                    <option>Instructor</option>
+                    <option>Support</option>
+                    <option>Volunteer</option>
+                  </select>
+                </label>
+                <label>
+                  Email*
+                  <input
+                    name="email"
+                    type="email"
+                    value={profileForm.email}
+                    onChange={handleProfileFormChange}
+                    required
+                  />
+                </label>
+                <label>
+                  Phone
+                  <input
+                    name="phone"
+                    value={profileForm.phone}
+                    onChange={handleProfileFormChange}
+                  />
+                </label>
+                <label className="form__full">
+                  Update photo (optional)
+                  <input
+                    name="photoFile"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleProfileFormChange}
+                  />
+                </label>
+              </div>
+              <button type="submit" className="primary">
+                Save profile changes
+              </button>
+            </form>
+          </div>
+          <div className="panel__sublist">
+            <h3>Change password</h3>
+            <form className="form" onSubmit={handlePasswordUpdate}>
+              <div className="form__grid">
+                <label>
+                  Current password
+                  <input
+                    name="currentPassword"
+                    type="password"
+                    value={passwordForm.currentPassword}
+                    onChange={handlePasswordFormChange}
+                    required
+                  />
+                </label>
+                <label>
+                  New password
+                  <input
+                    name="nextPassword"
+                    type="password"
+                    value={passwordForm.nextPassword}
+                    onChange={handlePasswordFormChange}
+                    required
+                    minLength={6}
+                  />
+                </label>
+                <label>
+                  Confirm new password
+                  <input
+                    name="confirmPassword"
+                    type="password"
+                    value={passwordForm.confirmPassword}
+                    onChange={handlePasswordFormChange}
+                    required
+                    minLength={6}
+                  />
+                </label>
+              </div>
+              <button type="submit" className="primary">
+                Update password
+              </button>
+            </form>
+          </div>
         </section>
       ) : activeView === 'child' && selectedChild ? (
         <section className="panel">
@@ -935,9 +1482,6 @@ function App() {
                 <button type="button" className="ghost" onClick={handleBackToHome} aria-label="Back">
                   ←
                 </button>
-                <button type="button" className="ghost" onClick={() => setView('register')}>
-                  Register instructor
-                </button>
               </div>
             </div>
             <div className="list">
@@ -967,13 +1511,16 @@ function App() {
                       >
                         View details
                       </button>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => handleDeleteTeacher(teacher.id)}
-                      >
-                        Remove
-                      </button>
+                      {isLeadInstructor &&
+                        !teacher.role?.toLowerCase().includes('lead') && (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => handleDeleteTeacher(teacher.id)}
+                          >
+                            Remove
+                          </button>
+                        )}
                     </div>
                   </article>
                 ))
@@ -990,7 +1537,7 @@ function App() {
                       <h4>{teacher.name}</h4>
                       <p className="muted">{teacher.role}</p>
                       <span>{teacher.email}</span>
-                      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                         <button
                           type="button"
                           className="ghost"
@@ -998,13 +1545,24 @@ function App() {
                         >
                           View details
                         </button>
-                        <button
-                          type="button"
-                          className="primary"
-                          onClick={() => handleVerifyTeacher(teacher.id)}
-                        >
-                          Verify
-                        </button>
+                        {isLeadInstructor && (
+                          <>
+                            <button
+                              type="button"
+                              className="primary"
+                              onClick={() => handleVerifyTeacher(teacher.id)}
+                            >
+                              Verify
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => handleDeleteTeacher(teacher.id)}
+                            >
+                              Deny
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </article>
