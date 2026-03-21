@@ -86,6 +86,48 @@
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
 }
 
+.panel--home {
+  display: grid;
+  gap: 16px;
+}
+
+.home__intro {
+  margin: 0;
+  color: #5a5f75;
+  font-size: 0.98rem;
+}
+
+.home__actions {
+  display: grid;
+  gap: 12px;
+}
+
+.home__button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-align: left;
+  gap: 16px;
+}
+
+.home__button strong {
+  display: block;
+  font-size: 1.05rem;
+}
+
+.home__hint {
+  display: block;
+  font-size: 0.85rem;
+  color: #5a5f75;
+  margin-top: 4px;
+}
+
+.home__arrow {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
 .panel__heading {
   display: flex;
   flex-wrap: wrap;
@@ -93,6 +135,12 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
+}
+
+.panel__intro {
+  margin: 6px 0 0;
+  color: #5a5f75;
+  font-size: 0.95rem;
 }
 
 .panel__actions {
@@ -126,6 +174,15 @@
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.form__full {
+  grid-column: 1 / -1;
+}
+
+.panel--register {
+  max-width: 980px;
+  margin: 0 auto;
 }
 
 label {
@@ -315,6 +372,18 @@ textarea {
   .card {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+@media (min-width: 768px) {
+  .panel--register .form__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 720px) {
+  .home__actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

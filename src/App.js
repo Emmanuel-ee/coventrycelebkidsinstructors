@@ -1,4 +1,5 @@
 import React from 'react';
+import bcrypt from 'bcryptjs';
 import { QRCodeCanvas } from 'qrcode.react';
 import './App.css';
 import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
@@ -34,7 +35,7 @@ const mapTeacherFromDb = (teacher) => ({
   role: teacher.role || 'Lead Teacher',
   createdAt: teacher.created_at || teacher.createdAt || new Date().toISOString(),
   verified: teacher.verified === true || teacher.verified === 1 || teacher.verified === 'true',
-  password: teacher.password || '',
+  passwordHash: teacher.password_hash || teacher.password || '',
   photoUrl: teacher.photo_url || teacher.photoUrl || '',
 });
 
@@ -70,6 +71,7 @@ const mapTeacherToDb = (teacher) => ({
   role: teacher.role,
   created_at: teacher.createdAt,
   verified: typeof teacher.verified === 'boolean' ? teacher.verified : false,
+  password_hash: teacher.passwordHash || null,
   photo_url: teacher.photoUrl || null,
 });
 
@@ -82,8 +84,10 @@ function App() {
   const [isLoading, setIsLoading] = React.useState(isSupabaseEnabled);
   const [error, setError] = React.useState('');
   const [supabaseStatus, setSupabaseStatus] = React.useState('');
-  const [view, setView] = React.useState('list');
+  const [view, setView] = React.useState('login');
+  const [currentInstructor, setCurrentInstructor] = React.useState(null);
   const [selectedChild, setSelectedChild] = React.useState(null);
+  const [selectedTeacher, setSelectedTeacher] = React.useState(null);
   const [isUpdatingChildStatus, setIsUpdatingChildStatus] = React.useState(false);
   const [teacherForm, setTeacherForm] = React.useState({
     name: '',
@@ -93,6 +97,15 @@ function App() {
     password: '',
     password2: '',
     photoFile: null,
+  });
+  const [loginForm, setLoginForm] = React.useState({
+    email: '',
+    password: '',
+  });
+  const [passwordForm, setPasswordForm] = React.useState({
+    currentPassword: '',
+    nextPassword: '',
+    confirmPassword: '',
   });
   const [childSearch, setChildSearch] = React.useState('');
 
@@ -133,7 +146,6 @@ function App() {
         teachers: (teachersResponse.data || []).map(mapTeacherFromDb),
         children: (childrenResponse.data || []).map(mapChildFromDb),
       });
-      setSupabaseStatus('Records synced from Supabase.');
       setIsLoading(false);
     };
 
@@ -152,9 +164,160 @@ function App() {
     }));
   };
 
-  const handleBackToList = () => {
+  const handleLoginChange = (event) => {
+    const { name, value } = event.target;
+    setLoginForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const handlePasswordFormChange = (event) => {
+    const { name, value } = event.target;
+    setPasswordForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const handleLogin = async (event) => {
+    event.preventDefault();
+    setError('');
+    setSupabaseStatus('');
+    const email = loginForm.email.trim().toLowerCase();
+    if (!email || !loginForm.password) {
+      setError('Email and password are required.');
+      return;
+    }
+    const instructor = records.teachers.find(
+      (teacher) => teacher.email?.toLowerCase() === email
+    );
+    if (!instructor) {
+      setError('No instructor found with that email.');
+      return;
+    }
+    if (!instructor.verified) {
+      setError('This instructor is pending verification.');
+      return;
+    }
+    let passwordMatches = false;
+    if (instructor.passwordHash) {
+      passwordMatches = await bcrypt.compare(loginForm.password, instructor.passwordHash);
+    }
+    if (!passwordMatches) {
+      setError('Incorrect password.');
+      return;
+    }
+    setCurrentInstructor(instructor);
+    setLoginForm({ email: '', password: '' });
+    setView('home');
+  };
+
+  const handlePasswordUpdate = async (event) => {
+    event.preventDefault();
+    if (!currentInstructor) {
+      return;
+    }
+    setError('');
+    setSupabaseStatus('');
+    if (!passwordForm.currentPassword || !passwordForm.nextPassword) {
+      setError('Please enter your current and new password.');
+      return;
+    }
+    if (passwordForm.nextPassword.length < 6) {
+      setError('New password must be at least 6 characters.');
+      return;
+    }
+    if (passwordForm.nextPassword !== passwordForm.confirmPassword) {
+      setError('New passwords do not match.');
+      return;
+    }
+    const storedInstructor = records.teachers.find(
+      (teacher) => teacher.id === currentInstructor.id
+    );
+    const currentHash = storedInstructor?.passwordHash || '';
+    const matches = currentHash
+      ? await bcrypt.compare(passwordForm.currentPassword, currentHash)
+      : false;
+    if (!matches) {
+      setError('Current password is incorrect.');
+      return;
+    }
+    const nextHash = await bcrypt.hash(passwordForm.nextPassword, 10);
+    if (isSupabaseEnabled) {
+      const { error: updateError } = await supabase
+        .from('teachers')
+        .update({ password_hash: nextHash })
+        .eq('id', currentInstructor.id);
+      if (updateError) {
+        setError(`Unable to update password. ${updateError.message}`);
+        return;
+      }
+    }
+    setRecords((prev) => ({
+      ...prev,
+      teachers: prev.teachers.map((teacher) =>
+        teacher.id === currentInstructor.id
+          ? { ...teacher, passwordHash: nextHash }
+          : teacher
+      ),
+    }));
+    setCurrentInstructor((prev) => (prev ? { ...prev, passwordHash: nextHash } : prev));
+    setPasswordForm({ currentPassword: '', nextPassword: '', confirmPassword: '' });
+    setSupabaseStatus('Password updated.');
+  };
+
+  const openChild = (child) => {
+    setSelectedChild(child);
+    setView('child');
+  };
+
+  const openInstructor = (teacher) => {
+    setSelectedTeacher(teacher);
+    setView('instructor');
+  };
+
+  const renderTeacherAvatar = (teacher, size = 42) => (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        overflow: 'hidden',
+        background: '#e0e7ff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#4859f0',
+        fontWeight: 700,
+      }}
+    >
+      {teacher.photoUrl ? (
+        <img
+          src={teacher.photoUrl}
+          alt={teacher.name}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        />
+      ) : (
+        <span>{teacher.name.slice(0, 1).toUpperCase()}</span>
+      )}
+    </div>
+  );
+
+  const handleBackToHome = () => {
     setSelectedChild(null);
-    setView('list');
+    setSelectedTeacher(null);
+    setView('home');
+  };
+
+  const handleBackToInstructors = () => {
+    setSelectedTeacher(null);
+    setView('instructors');
+  };
+
+  const handleBackToChildren = () => {
+    setSelectedChild(null);
+    setView('children');
   };
 
   const handleChildCheckin = async (action) => {
@@ -242,13 +405,14 @@ function App() {
       setError('Passwords do not match.');
       return;
     }
+    const passwordHash = await bcrypt.hash(teacherForm.password, 10);
     const newTeacher = {
       id: createId(),
       name: teacherForm.name.trim(),
       email: teacherForm.email.trim(),
       phone: teacherForm.phone.trim(),
       role: teacherForm.role,
-      password: teacherForm.password,
+      passwordHash,
       createdAt: new Date().toISOString(),
       verified: false,
       photoUrl: '',
@@ -301,7 +465,7 @@ function App() {
       photoFile: null,
     });
     setPendingVerification(true);
-    setView('list');
+    setView(currentInstructor ? 'instructors' : 'login');
   };
 
   const handleDeleteTeacher = async (teacherId) => {
@@ -336,6 +500,10 @@ function App() {
         child.teacherId === teacherId ? { ...child, teacherId: '' } : child
       ),
     }));
+    if (currentInstructor?.id === teacherId) {
+      setCurrentInstructor(null);
+      setView('login');
+    }
   };
 
   const handleVerifyTeacher = async (teacherId) => {
@@ -363,7 +531,17 @@ function App() {
   };
 
   const pendingTeachers = records.teachers.filter((teacher) => !teacher.verified);
-  const verifiedTeachers = records.teachers.filter((teacher) => teacher.verified);
+  const verifiedTeachers = records.teachers
+    .filter((teacher) => teacher.verified)
+    .slice()
+    .sort((a, b) => {
+      const aLead = a.role?.toLowerCase().includes('lead') ? 1 : 0;
+      const bLead = b.role?.toLowerCase().includes('lead') ? 1 : 0;
+      if (aLead !== bLead) {
+        return bLead - aLead;
+      }
+      return (a.name || '').localeCompare(b.name || '');
+    });
 
   const filteredChildren = records.children.filter((child) => {
     if (!childSearch.trim()) {
@@ -383,11 +561,17 @@ function App() {
     return acc;
   }, {});
 
+  const assignedChildren = selectedTeacher
+    ? records.children.filter((child) => child.teacherId === selectedTeacher.id)
+    : [];
+
   const qrCodeValue = selectedChild
     ? `${window.location.origin}${process.env.PUBLIC_URL || ''}/?scan=${
         selectedChild.qrCode || selectedChild.id
       }`
     : '';
+
+  const activeView = !currentInstructor && view !== 'register' ? 'login' : view;
 
   const registerInstructorForm = (
     <form className="form" onSubmit={handleAddTeacher}>
@@ -405,7 +589,6 @@ function App() {
         <label>
           Role
           <select name="role" value={teacherForm.role} onChange={handleTeacherChange}>
-            <option>Lead Teacher</option>
             <option>Instructor</option>
             <option>Support</option>
             <option>Volunteer</option>
@@ -431,7 +614,7 @@ function App() {
             placeholder="(555) 123-4567"
           />
         </label>
-        <label>
+        <label className="form__full">
           Photo (optional)
           <input
             name="photoFile"
@@ -439,7 +622,6 @@ function App() {
             accept="image/*"
             onChange={handleTeacherChange}
           />
-          <span className="helper">Uploaded to Supabase storage.</span>
         </label>
         <label>
           Password*
@@ -478,12 +660,16 @@ function App() {
   return (
     <div className="app">
       <header className="app__header">
-        <div>
-          <p className="app__eyebrow">CelebKids Admin</p>
-          <h1>Instructor Dashboard</h1>
-          <p className="app__subtitle">
-            Manage instructor onboarding and view child details in one clean workspace.
-          </p>
+        <div className="app__brand">
+          <img
+            className="app__logo"
+            src={`${process.env.PUBLIC_URL}/logo/Asset 199.svg`}
+            alt="CCI logo"
+          />
+          <div>
+            <p className="app__eyebrow">CelebKids Admin</p>
+            <h1>Instructor Dashboard</h1>
+          </div>
         </div>
         <div className="app__stats">
           <div>
@@ -503,23 +689,207 @@ function App() {
         {!error && supabaseStatus && <p className="banner banner--success">{supabaseStatus}</p>}
       </div>
 
-      {view === 'register' ? (
+      {activeView === 'login' ? (
         <section className="panel">
           <div className="panel__heading">
-            <h2>Register instructor</h2>
-            <button type="button" className="ghost" onClick={() => setView('list')}>
-              Back to list
+            <h2>Instructor login</h2>
+          </div>
+          <form className="form" onSubmit={handleLogin}>
+            <div className="form__grid">
+              <label>
+                Email
+                <input
+                  name="email"
+                  type="email"
+                  value={loginForm.email}
+                  onChange={handleLoginChange}
+                  placeholder="instructor@email.com"
+                  required
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  name="password"
+                  type="password"
+                  value={loginForm.password}
+                  onChange={handleLoginChange}
+                  placeholder="Enter your password"
+                  required
+                />
+              </label>
+            </div>
+            <button type="submit" className="primary">
+              Sign in
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setView('register')}
+            >
+              Register instructor
+            </button>
+          </form>
+        </section>
+      ) : activeView === 'home' ? (
+        <section className="panel panel--home">
+          <div className="panel__heading">
+            <h2>Welcome</h2>
+          </div>
+          <div className="home__actions">
+            <button
+              type="button"
+              className="primary home__button"
+              onClick={() => setView('children')}
+            >
+              <span>
+                <strong>Children</strong>
+                <span className="home__hint">View, search, and manage child details</span>
+              </span>
+              <span className="home__arrow">→</span>
+            </button>
+            <button
+              type="button"
+              className="ghost home__button"
+              onClick={() => setView('instructors')}
+            >
+              <span>
+                <strong>Instructors</strong>
+                <span className="home__hint">Review, verify, and register instructors</span>
+              </span>
+              <span className="home__arrow">→</span>
+            </button>
+          </div>
+        </section>
+      ) : activeView === 'register' ? (
+        <section className="panel panel--register">
+          <div className="panel__heading">
+            <div>
+              <h2>Register instructor</h2>
+              <p className="panel__intro">
+                Provide instructor details and a secure password to create the account.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="ghost"
+              onClick={currentInstructor ? handleBackToInstructors : () => setView('login')}
+            >
+              {currentInstructor ? 'Back to instructors' : 'Back to login'}
             </button>
           </div>
           {registerInstructorForm}
         </section>
-      ) : view === 'child' && selectedChild ? (
+      ) : activeView === 'instructor' && selectedTeacher ? (
+        <section className="panel">
+          <div className="panel__heading">
+            <h2>{selectedTeacher.name}</h2>
+            <div className="panel__actions">
+              <button type="button" className="ghost" onClick={handleBackToInstructors}>
+                Back to instructors
+              </button>
+              {!selectedTeacher.verified && (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => handleVerifyTeacher(selectedTeacher.id)}
+                >
+                  Verify instructor
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="card card--stack">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              {renderTeacherAvatar(selectedTeacher, 56)}
+              <div>
+                <h3>{selectedTeacher.role}</h3>
+                <p className="muted">
+                  {selectedTeacher.verified ? 'Verified instructor' : 'Pending verification'}
+                </p>
+              </div>
+            </div>
+            <div className="meta">
+              <span>Email: {selectedTeacher.email || 'No email provided'}</span>
+              <span>Phone: {selectedTeacher.phone || 'No phone provided'}</span>
+              <span>
+                Joined:{' '}
+                {selectedTeacher.createdAt
+                  ? new Date(selectedTeacher.createdAt).toLocaleDateString()
+                  : 'Unknown'}
+              </span>
+            </div>
+          </div>
+          <div className="panel__sublist">
+            <h3>Assigned children</h3>
+            {assignedChildren.length === 0 ? (
+              <p className="empty">No children assigned to this instructor yet.</p>
+            ) : (
+              assignedChildren.map((child) => (
+                <article key={child.id} className="card">
+                  <div>
+                    <h4>{child.name}</h4>
+                    <p className="muted">Class: {child.classCategory || 'Unassigned'}</p>
+                  </div>
+                  <button type="button" className="ghost" onClick={() => openChild(child)}>
+                    View child
+                  </button>
+                </article>
+              ))
+            )}
+          </div>
+          {currentInstructor?.id === selectedTeacher.id && (
+            <div className="panel__sublist">
+              <h3>Change password</h3>
+              <form className="form" onSubmit={handlePasswordUpdate}>
+                <div className="form__grid">
+                  <label>
+                    Current password
+                    <input
+                      name="currentPassword"
+                      type="password"
+                      value={passwordForm.currentPassword}
+                      onChange={handlePasswordFormChange}
+                      required
+                    />
+                  </label>
+                  <label>
+                    New password
+                    <input
+                      name="nextPassword"
+                      type="password"
+                      value={passwordForm.nextPassword}
+                      onChange={handlePasswordFormChange}
+                      required
+                      minLength={6}
+                    />
+                  </label>
+                  <label>
+                    Confirm new password
+                    <input
+                      name="confirmPassword"
+                      type="password"
+                      value={passwordForm.confirmPassword}
+                      onChange={handlePasswordFormChange}
+                      required
+                      minLength={6}
+                    />
+                  </label>
+                </div>
+                <button type="submit" className="primary">
+                  Update password
+                </button>
+              </form>
+            </div>
+          )}
+        </section>
+      ) : activeView === 'child' && selectedChild ? (
         <section className="panel">
           <div className="panel__heading">
             <h2>{selectedChild.name}</h2>
             <div className="panel__actions">
-              <button type="button" className="ghost" onClick={handleBackToList}>
-                Back to list
+              <button type="button" className="ghost" onClick={handleBackToChildren}>
+                Back to children
               </button>
               <button
                 type="button"
@@ -555,12 +925,15 @@ function App() {
             </div>
           </div>
         </section>
-      ) : (
+      ) : activeView === 'instructors' ? (
         <div className="app__main">
           <section className="panel">
             <div className="panel__heading">
               <h2>Instructors</h2>
               <div className="panel__actions">
+                <button type="button" className="ghost" onClick={handleBackToHome} aria-label="Back">
+                  ←
+                </button>
                 <button type="button" className="ghost" onClick={() => setView('register')}>
                   Register instructor
                 </button>
@@ -574,30 +947,7 @@ function App() {
                   <article key={teacher.id} className="card">
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <div
-                          style={{
-                            width: 42,
-                            height: 42,
-                            borderRadius: '50%',
-                            overflow: 'hidden',
-                            background: '#e0e7ff',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: '#4859f0',
-                            fontWeight: 700,
-                          }}
-                        >
-                          {teacher.photoUrl ? (
-                            <img
-                              src={teacher.photoUrl}
-                              alt={teacher.name}
-                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                            />
-                          ) : (
-                            <span>{teacher.name.slice(0, 1).toUpperCase()}</span>
-                          )}
-                        </div>
+                        {renderTeacherAvatar(teacher)}
                         <div>
                           <h3>{teacher.name}</h3>
                           <p className="muted">{teacher.role}</p>
@@ -608,13 +958,22 @@ function App() {
                         <span>{teacher.phone || 'No phone'}</span>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => handleDeleteTeacher(teacher.id)}
-                    >
-                      Remove
-                    </button>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => openInstructor(teacher)}
+                      >
+                        View details
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => handleDeleteTeacher(teacher.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </article>
                 ))
               )}
@@ -630,64 +989,74 @@ function App() {
                       <h4>{teacher.name}</h4>
                       <p className="muted">{teacher.role}</p>
                       <span>{teacher.email}</span>
-                      <button
-                        type="button"
-                        className="primary"
-                        onClick={() => handleVerifyTeacher(teacher.id)}
-                      >
-                        Verify
-                      </button>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </section>
-          <section className="panel">
-            <div className="panel__heading">
-              <h2>Children</h2>
-              <div className="panel__actions">
-                <input
-                  className="search"
-                  type="search"
-                  placeholder="Search children"
-                  value={childSearch}
-                  onChange={(event) => setChildSearch(event.target.value)}
-                />
-              </div>
-            </div>
-            <div className="list">
-              {filteredChildren.length === 0 ? (
-                <p className="empty">No children found.</p>
-              ) : (
-                filteredChildren.map((child) => (
-                  <article key={child.id} className="card">
-                    <div>
-                      <h3>{child.name}</h3>
-                      <p className="muted">Class: {child.classCategory || 'Unassigned'}</p>
-                      <div className="meta">
-                        <span>Guardian: {child.guardianName || 'No guardian listed'}</span>
-                        <span>Contact: {child.guardianContact || 'No contact listed'}</span>
-                        <span>Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}</span>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => openInstructor(teacher)}
+                        >
+                          View details
+                        </button>
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={() => handleVerifyTeacher(teacher.id)}
+                        >
+                          Verify
+                        </button>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => {
-                        setSelectedChild(child);
-                        setView('child');
-                      }}
-                    >
-                      View details
-                    </button>
                   </article>
                 ))
               )}
             </div>
           </section>
         </div>
-      )}
+      ) : activeView === 'children' ? (
+        <section className="panel">
+          <div className="panel__heading">
+            <h2>Children</h2>
+            <div className="panel__actions">
+              <button type="button" className="ghost" onClick={handleBackToHome} aria-label="Back">
+                ←
+              </button>
+              <input
+                className="search"
+                type="search"
+                placeholder="Search children"
+                value={childSearch}
+                onChange={(event) => setChildSearch(event.target.value)}
+              />
+            </div>
+          </div>
+          <div className="list">
+            {filteredChildren.length === 0 ? (
+              <p className="empty">No children found.</p>
+            ) : (
+              filteredChildren.map((child) => (
+                <article key={child.id} className="card">
+                  <div>
+                    <h3>{child.name}</h3>
+                    <p className="muted">Class: {child.classCategory || 'Unassigned'}</p>
+                    <div className="meta">
+                      <span>Guardian: {child.guardianName || 'No guardian listed'}</span>
+                      <span>Contact: {child.guardianContact || 'No contact listed'}</span>
+                      <span>Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => openChild(child)}
+                  >
+                    View details
+                  </button>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
