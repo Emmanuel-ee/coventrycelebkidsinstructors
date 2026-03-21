@@ -649,7 +649,7 @@ function App() {
         </label>
       </div>
       <button type="submit" className="primary">
-        Register instructor
+        Register as instructor
       </button>
       {pendingVerification && (
         <p className="muted">Registration submitted. Awaiting Lead Instructor email verification.</p>
@@ -727,7 +727,7 @@ function App() {
               className="ghost"
               onClick={() => setView('register')}
             >
-              Register instructor
+              Register as instructor
             </button>
           </form>
         </section>
@@ -765,7 +765,7 @@ function App() {
         <section className="panel panel--register">
           <div className="panel__heading">
             <div>
-              <h2>Register instructor</h2>
+              <h2>Register as instructor</h2>
               <p className="panel__intro">
                 Provide instructor details and a secure password to create the account.
               </p>
@@ -935,7 +935,7 @@ function App() {
                   ←
                 </button>
                 <button type="button" className="ghost" onClick={() => setView('register')}>
-                  Register instructor
+                  Register as instructor
                 </button>
               </div>
             </div>
