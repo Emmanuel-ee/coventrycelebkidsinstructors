@@ -987,7 +987,18 @@ function App() {
         .map((child) => child.classCategory?.trim())
         .filter(Boolean)
     );
-    return ['all', ...Array.from(unique).sort((a, b) => a.localeCompare(b))];
+    const priority = ['TenderFoot', 'Lighttroopers', 'Tribe of Truth', 'Celeb Teens'];
+    const sorted = Array.from(unique).sort((a, b) => {
+      const aIndex = priority.indexOf(a);
+      const bIndex = priority.indexOf(b);
+      if (aIndex !== -1 || bIndex !== -1) {
+        if (aIndex === -1) return 1;
+        if (bIndex === -1) return -1;
+        return aIndex - bIndex;
+      }
+      return a.localeCompare(b);
+    });
+    return ['all', ...sorted];
   }, [records.children]);
 
   const classFilteredChildren = React.useMemo(() => {
@@ -1013,7 +1024,17 @@ function App() {
         category,
         children: children.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')),
       }))
-      .sort((a, b) => a.category.localeCompare(b.category));
+      .sort((a, b) => {
+        const priority = ['TenderFoot', 'Lighttroopers', 'Tribe of Truth', 'Celeb Teens'];
+        const aIndex = priority.indexOf(a.category);
+        const bIndex = priority.indexOf(b.category);
+        if (aIndex !== -1 || bIndex !== -1) {
+          if (aIndex === -1) return 1;
+          if (bIndex === -1) return -1;
+          return aIndex - bIndex;
+        }
+        return a.category.localeCompare(b.category);
+      });
   }, [classFilteredChildren]);
 
   const teacherLookup = React.useMemo(
