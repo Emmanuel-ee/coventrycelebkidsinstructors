@@ -121,6 +121,7 @@ function App() {
     confirmPassword: '',
   });
   const [childSearch, setChildSearch] = React.useState('');
+  const [classFilter, setClassFilter] = React.useState('all');
   const [deletePrompt, setDeletePrompt] = React.useState({
     isOpen: false,
     teacherId: '',
@@ -980,6 +981,41 @@ function App() {
     );
   }, [records.children, childSearch]);
 
+  const classOptions = React.useMemo(() => {
+    const unique = new Set(
+      records.children
+        .map((child) => child.classCategory?.trim())
+        .filter(Boolean)
+    );
+    return ['all', ...Array.from(unique).sort((a, b) => a.localeCompare(b))];
+  }, [records.children]);
+
+  const classFilteredChildren = React.useMemo(() => {
+    if (classFilter === 'all') {
+      return filteredChildren;
+    }
+    return filteredChildren.filter(
+      (child) => (child.classCategory?.trim() || 'Unassigned') === classFilter
+    );
+  }, [filteredChildren, classFilter]);
+
+  const groupedChildren = React.useMemo(() => {
+    const groups = classFilteredChildren.reduce((acc, child) => {
+      const key = child.classCategory?.trim() || 'Unassigned';
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+      acc[key].push(child);
+      return acc;
+    }, {});
+    return Object.entries(groups)
+      .map(([category, children]) => ({
+        category,
+        children: children.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')),
+      }))
+      .sort((a, b) => a.category.localeCompare(b.category));
+  }, [classFilteredChildren]);
+
   const teacherLookup = React.useMemo(
     () =>
       records.teachers.reduce((acc, teacher) => {
@@ -1598,6 +1634,18 @@ function App() {
               <button type="button" className="ghost" onClick={handleBackToHome} aria-label="Back">
                 ←
               </button>
+              <select
+                className="search"
+                value={classFilter}
+                onChange={(event) => setClassFilter(event.target.value)}
+                aria-label="Filter by class"
+              >
+                {classOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option === 'all' ? 'All classes' : option}
+                  </option>
+                ))}
+              </select>
               <input
                 className="search"
                 type="search"
@@ -1608,28 +1656,35 @@ function App() {
             </div>
           </div>
           <div className="list">
-            {filteredChildren.length === 0 ? (
+            {groupedChildren.length === 0 ? (
               <p className="empty">No children found.</p>
             ) : (
-              filteredChildren.map((child) => (
-                <article key={child.id} className="card">
-                  <div>
-                    <h3>{child.name}</h3>
-                    <p className="muted">Class: {child.classCategory || 'Unassigned'}</p>
-                    <div className="meta">
-                      <span>Guardian: {child.guardianName || 'No guardian listed'}</span>
-                      <span>Contact: {child.guardianContact || 'No contact listed'}</span>
-                      <span>Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}</span>
-                    </div>
+              groupedChildren.map((group) => (
+                <div key={group.category} className="list-section">
+                  <h3 className="list-section__title">{group.category}</h3>
+                  <div className="list">
+                    {group.children.map((child) => (
+                      <article key={child.id} className="card">
+                        <div>
+                          <h4>{child.name}</h4>
+                          <div className="meta">
+                            <span>Age: {child.age || 'Not provided'}</span>
+                            <span>Guardian: {child.guardianName || 'No guardian listed'}</span>
+                            <span>Contact: {child.guardianContact || 'No contact listed'}</span>
+                            <span>Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => openChild(child)}
+                        >
+                          View details
+                        </button>
+                      </article>
+                    ))}
                   </div>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => openChild(child)}
-                  >
-                    View details
-                  </button>
-                </article>
+                </div>
               ))
             )}
           </div>

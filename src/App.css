@@ -238,6 +238,19 @@ textarea {
   gap: 12px;
 }
 
+.list-section {
+  display: grid;
+  gap: 12px;
+}
+
+.list-section__title {
+  margin: 8px 0 0;
+  font-size: 1rem;
+  color: #3b3f55;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .card {
   border: 1px solid #eef0f7;
   border-radius: 16px;
