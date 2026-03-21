@@ -5,6 +5,8 @@ import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
 
 const STORAGE_KEY = 'celebkids-records-v1';
 const EMPTY_RECORDS = { teachers: [], children: [] };
+const INSTRUCTOR_PHOTOS_BUCKET =
+  process.env.REACT_APP_INSTRUCTOR_PHOTOS_BUCKET || 'instructor-photos';
 
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -33,6 +35,7 @@ const mapTeacherFromDb = (teacher) => ({
   createdAt: teacher.created_at || teacher.createdAt || new Date().toISOString(),
   verified: teacher.verified === true || teacher.verified === 1 || teacher.verified === 'true',
   password: teacher.password || '',
+  photoUrl: teacher.photo_url || teacher.photoUrl || '',
 });
 
 const mapChildFromDb = (child) => ({
@@ -67,85 +70,11 @@ const mapTeacherToDb = (teacher) => ({
   role: teacher.role,
   created_at: teacher.createdAt,
   verified: typeof teacher.verified === 'boolean' ? teacher.verified : false,
+  photo_url: teacher.photoUrl || null,
 });
 
 function App() {
-  // Handler to download attendance as CSV
-  const handleDownloadAttendance = async () => {
-    setError('');
-    setSupabaseStatus('');
-    try {
-      // Fetch all checkins from Supabase
-      const { data: checkins, error: checkinsError } = await supabase
-        .from('checkins')
-        .select('*')
-        .order('created_at', { ascending: true });
-      if (checkinsError) {
-        setError('Failed to fetch attendance records.');
-        return;
-      }
-      // Fetch all children for lookup
-      const { data: children, error: childrenError } = await supabase
-        .from('children')
-        .select('*');
-      if (childrenError) {
-        setError('Failed to fetch children records.');
-        return;
-      }
-      // Build a map of childId to child info
-      const childMap = {};
-      children.forEach((child) => {
-        childMap[child.id] = child;
-      });
-      // For each child, find their first sign_in and last sign_out
-      const attendance = {};
-      checkins.forEach((entry) => {
-        if (!attendance[entry.child_id]) {
-          attendance[entry.child_id] = { signIn: null, signOut: null };
-        }
-        if (entry.action === 'sign_in') {
-          if (!attendance[entry.child_id].signIn) {
-            attendance[entry.child_id].signIn = entry.created_at;
-          }
-        } else if (entry.action === 'sign_out') {
-          attendance[entry.child_id].signOut = entry.created_at;
-        }
-      });
-      // Prepare CSV rows
-      const rows = [
-        ['Name', 'Guardian', 'Class', 'Sign In Time', 'Sign Out Time'],
-      ];
-      Object.keys(attendance).forEach((childId) => {
-        const child = childMap[childId];
-        if (!child) return;
-        rows.push([
-          child.name || '',
-          child.guardian_name || child.guardianName || '',
-          child.class_category || child.classCategory || '',
-          attendance[childId].signIn ? new Date(attendance[childId].signIn).toLocaleString() : '',
-          attendance[childId].signOut ? new Date(attendance[childId].signOut).toLocaleString() : '',
-        ]);
-      });
-      // Convert to CSV string
-      const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
-      // Trigger download
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `attendance_${new Date().toISOString().slice(0,10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      setSupabaseStatus('Attendance CSV downloaded.');
-    } catch (err) {
-      setError('An error occurred while downloading attendance.');
-    }
-  };
-  // Skip login: always set a dummy instructor
-  const [currentInstructor, setCurrentInstructor] = React.useState({ name: 'Demo Instructor', role: 'Lead Teacher', email: 'demo@celebkids.com', verified: true });
-  // Handler for Lead Instructor to verify a teacher (simulate email link click)
+  const attendanceActive = true;
   const [pendingVerification, setPendingVerification] = React.useState(false);
   const [records, setRecords] = React.useState(() =>
     isSupabaseEnabled ? EMPTY_RECORDS : loadLocalRecords()
@@ -163,8 +92,8 @@ function App() {
     role: 'Lead Teacher',
     password: '',
     password2: '',
+    photoFile: null,
   });
-  const [teacherSearch, setTeacherSearch] = React.useState('');
   const [childSearch, setChildSearch] = React.useState('');
 
   React.useEffect(() => {
@@ -216,13 +145,11 @@ function App() {
   }, []);
 
   const handleTeacherChange = (event) => {
-    const { name, value } = event.target;
-    setTeacherForm((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handleSelectChild = (child) => {
-    setSelectedChild(child);
-    setView('child');
+    const { name, value, files, type } = event.target;
+    setTeacherForm((prev) => ({
+      ...prev,
+      [name]: type === 'file' ? files?.[0] || null : value,
+    }));
   };
 
   const handleBackToList = () => {
@@ -231,6 +158,10 @@ function App() {
   };
 
   const handleChildCheckin = async (action) => {
+    if (!attendanceActive) {
+      setError('Attendance session is not active. Lead instructor must start the session.');
+      return;
+    }
     if (!selectedChild) {
       return;
     }
@@ -293,7 +224,6 @@ function App() {
     setIsUpdatingChildStatus(false);
   };
 
-
   const handleAddTeacher = async (event) => {
     event.preventDefault();
     if (!teacherForm.name.trim()) {
@@ -321,10 +251,33 @@ function App() {
       password: teacherForm.password,
       createdAt: new Date().toISOString(),
       verified: false,
+      photoUrl: '',
     };
     if (isSupabaseEnabled) {
       setError('');
       setSupabaseStatus('');
+      if (teacherForm.photoFile) {
+        const fileExt = teacherForm.photoFile.name.split('.').pop();
+        const filePath = `instructors/${newTeacher.id}.${fileExt}`;
+        const { error: uploadError } = await supabase.storage
+          .from(INSTRUCTOR_PHOTOS_BUCKET)
+          .upload(filePath, teacherForm.photoFile, {
+            upsert: true,
+            contentType: teacherForm.photoFile.type,
+          });
+        if (uploadError) {
+          setError(
+            `Unable to upload photo. ${uploadError.message} (Bucket: ${INSTRUCTOR_PHOTOS_BUCKET})`
+          );
+          return;
+        }
+        const { data: publicData } = supabase
+          .storage
+          .from(INSTRUCTOR_PHOTOS_BUCKET)
+          .getPublicUrl(filePath);
+        newTeacher.photoUrl = publicData?.publicUrl || '';
+      }
+
       const { error: insertError } = await supabase
         .from('teachers')
         .insert([mapTeacherToDb(newTeacher)]);
@@ -338,11 +291,18 @@ function App() {
       ...prev,
       teachers: [newTeacher, ...prev.teachers],
     }));
-    setTeacherForm({ name: '', email: '', phone: '', role: 'Lead Teacher', password: '', password2: '' });
+    setTeacherForm({
+      name: '',
+      email: '',
+      phone: '',
+      role: 'Lead Teacher',
+      password: '',
+      password2: '',
+      photoFile: null,
+    });
     setPendingVerification(true);
     setView('list');
   };
-
 
   const handleDeleteTeacher = async (teacherId) => {
     if (!window.confirm('Remove this teacher? Children assigned will become unassigned.')) {
@@ -378,13 +338,45 @@ function App() {
     }));
   };
 
+  const handleVerifyTeacher = async (teacherId) => {
+    setError('');
+    setSupabaseStatus('');
+    if (isSupabaseEnabled) {
+      const { error: updateError } = await supabase
+        .from('teachers')
+        .update({ verified: true })
+        .eq('id', teacherId);
+      if (updateError) {
+        setError(
+          `Unable to verify instructor. ${updateError.message} (Check RLS update policy on public.teachers.)`
+        );
+        return;
+      }
+    }
+    setRecords((prev) => ({
+      ...prev,
+      teachers: prev.teachers.map((t) =>
+        t.id === teacherId ? { ...t, verified: true } : t
+      ),
+    }));
+    setSupabaseStatus('Instructor verified.');
+  };
 
-  // Removed unused filteredTeachers
-  const pendingTeachers = records.teachers.filter((t) => !t.verified);
-  const verifiedTeachers = records.teachers.filter((t) => t.verified);
-  const filteredChildren = records.children.filter((child) =>
-    child.name.toLowerCase().includes(childSearch.toLowerCase())
-  );
+  const pendingTeachers = records.teachers.filter((teacher) => !teacher.verified);
+  const verifiedTeachers = records.teachers.filter((teacher) => teacher.verified);
+
+  const filteredChildren = records.children.filter((child) => {
+    if (!childSearch.trim()) {
+      return true;
+    }
+    const query = childSearch.trim().toLowerCase();
+    return (
+      child.name?.toLowerCase().includes(query) ||
+      child.guardianName?.toLowerCase().includes(query) ||
+      child.guardianContact?.toLowerCase().includes(query) ||
+      child.classCategory?.toLowerCase().includes(query)
+    );
+  });
 
   const teacherLookup = records.teachers.reduce((acc, teacher) => {
     acc[teacher.id] = teacher.name;
@@ -392,7 +384,9 @@ function App() {
   }, {});
 
   const qrCodeValue = selectedChild
-    ? `${window.location.origin}${process.env.PUBLIC_URL || ''}/?scan=${selectedChild.qrCode || selectedChild.id}`
+    ? `${window.location.origin}${process.env.PUBLIC_URL || ''}/?scan=${
+        selectedChild.qrCode || selectedChild.id
+      }`
     : '';
 
   const registerInstructorForm = (
@@ -412,7 +406,7 @@ function App() {
           Role
           <select name="role" value={teacherForm.role} onChange={handleTeacherChange}>
             <option>Lead Teacher</option>
-            <option>Assistant</option>
+            <option>Instructor</option>
             <option>Support</option>
             <option>Volunteer</option>
           </select>
@@ -436,6 +430,16 @@ function App() {
             onChange={handleTeacherChange}
             placeholder="(555) 123-4567"
           />
+        </label>
+        <label>
+          Photo (optional)
+          <input
+            name="photoFile"
+            type="file"
+            accept="image/*"
+            onChange={handleTeacherChange}
+          />
+          <span className="helper">Uploaded to Supabase storage.</span>
         </label>
         <label>
           Password*
@@ -471,60 +475,20 @@ function App() {
     </form>
   );
 
-  // Handler for Lead Instructor to verify a teacher (simulate email link click)
-  const handleVerifyTeacher = async (teacherId) => {
-    if (isSupabaseEnabled) {
-      const { error: updateError } = await supabase
-        .from('teachers')
-        .update({ verified: true })
-        .eq('id', teacherId);
-      if (updateError) {
-        setError(`Unable to verify instructor. ${updateError.message}`);
-        return;
-      }
-    }
-    setRecords((prev) => ({
-      ...prev,
-      teachers: prev.teachers.map((t) =>
-        t.id === teacherId ? { ...t, verified: true } : t
-      ),
-    }));
-    setSupabaseStatus('Instructor verified.');
-  };
-
-  // Login handler (now username/password)
-
-  // if (!currentInstructor) {
-  //   return <Login onLogin={handleLogin} error={error} />;
-  // }
-
-  // All activities after login are done in the instructor's name
   return (
     <div className="app">
       <header className="app__header">
         <div>
-          <div className="app__brand">
-            <img
-              src={`${process.env.PUBLIC_URL}/logo/Asset%20203.svg`}
-              alt="Coventry CelebKids"
-              className="app__logo"
-            />
-            <div>
-              <h1>Coventry CelebKids Instructors</h1>
-              <div style={{ fontSize: '1rem', color: '#4859f0', marginTop: 4 }}>
-                Signed in as: <b>{currentInstructor.name}</b>
-                <button className="ghost" style={{ marginLeft: 12 }} onClick={() => setCurrentInstructor(null)}>Logout</button>
-              </div>
-            </div>
-          </div>
+          <p className="app__eyebrow">CelebKids Admin</p>
+          <h1>Instructor Dashboard</h1>
           <p className="app__subtitle">
-            Keep track of your classroom roster, guardians, and instructor assignments.
+            Manage instructor onboarding and view child details in one clean workspace.
           </p>
         </div>
         <div className="app__stats">
           <div>
-            <span className="stat__label">Instructors</span>
-            <span className="stat__value">{records.teachers.length}</span>
+            <span className="stat__label">Verified instructors</span>
+            <span className="stat__value">{verifiedTeachers.length}</span>
           </div>
           <div>
             <span className="stat__label">Children</span>
@@ -534,237 +498,196 @@ function App() {
       </header>
 
       <div className="app__status">
-        {isLoading && <p className="banner banner--info">Syncing records…</p>}
-        {supabaseStatus && <p className="banner banner--info">{supabaseStatus}</p>}
+        {isLoading && <p className="banner banner--info">Loading records…</p>}
         {error && <p className="banner banner--error">{error}</p>}
+        {!error && supabaseStatus && <p className="banner banner--success">{supabaseStatus}</p>}
       </div>
 
-      <main className="app__main">
-        {view === 'list' ? (
-          <>
-            <section className="panel">
-              <div className="panel__heading">
-                <h2>Instructors</h2>
-                <div className="panel__actions">
-                  <input
-                    className="search"
-                    type="search"
-                    placeholder="Search instructors"
-                    value={teacherSearch}
-                    onChange={(event) => setTeacherSearch(event.target.value)}
-                  />
-                  <button type="button" className="ghost" onClick={() => setView('register')}>
-                    Register instructor
-                  </button>
-                </div>
-              </div>
-
-              <div className="list">
-                {verifiedTeachers.length === 0 ? (
-                  <p className="empty">No verified instructors yet. Add your first instructor above.</p>
-                ) : (
-                  verifiedTeachers.map((teacher) => (
-                    <article key={teacher.id} className="card">
-                      <div>
-                        <h3>{teacher.name}</h3>
-                        <p className="muted">{teacher.role}</p>
-                        <div className="meta">
-                          <span>{teacher.email || 'No email'}</span>
-                          <span>{teacher.phone || 'No phone'}</span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => handleDeleteTeacher(teacher.id)}
-                      >
-                        Remove
-                      </button>
-                    </article>
-                  ))
-                )}
-              </div>
-              <div className="panel__sublist">
-                <h3>Pending Instructor Verifications</h3>
-                {pendingTeachers.length === 0 ? (
-                  <p className="empty">No pending verifications.</p>
-                ) : (
-                  pendingTeachers.map((teacher) => (
-                    <article key={teacher.id} className="card">
-                      <div>
-                        <h4>{teacher.name}</h4>
-                        <p className="muted">{teacher.role}</p>
-                        <span>{teacher.email}</span>
-                        <button
-                          type="button"
-                          className="primary"
-                          onClick={() => handleVerifyTeacher(teacher.id)}
-                        >
-                          Verify
-                        </button>
-                      </div>
-                    </article>
-                  ))
-                )}
-              </div>
-            </section>
-
-            <section className="panel">
-
-
-              <div className="panel__heading">
-                <h2>Registered children</h2>
-                <div className="panel__actions">
-                  <input
-                    className="search"
-                    type="search"
-                    placeholder="Search children"
-                    value={childSearch}
-                    onChange={(event) => setChildSearch(event.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="primary" 
-                    style={{ fontWeight: 'bold', fontSize: '1.1rem', background: '#4859f0', color: '#fff', borderRadius: 6, boxShadow: '0 2px 8px #4859f033', padding: '0.6em 1.4em', display: 'flex', alignItems: 'center', gap: 8 }}
-                    onClick={handleDownloadAttendance}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ marginRight: 6 }}>
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
-                    </svg>
-                    Download Attendance
-                  </button>
-                </div>
-              </div>
-
-              <div className="list">
-                {filteredChildren.length === 0 ? (
-                  <p className="empty">No children yet. Register children in the main app.</p>
-                ) : (
-                  filteredChildren.map((child) => (
-                    <article key={child.id} className="card">
-                      <div>
-                        <div className="card__title">
-                          <h3>{child.name}</h3>
-                          {child.age && <span className="badge">Age {child.age}</span>}
-                        </div>
-                        <p className="muted">
-                          Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}
-                          {child.classCategory ? ` • ${child.classCategory}` : ''}
-                        </p>
-                        <div className="meta">
-                          <span>{child.guardianName || 'No guardian listed'}</span>
-                          <span>{child.guardianContact || 'No contact listed'}</span>
-                          <span>{child.notes || 'No notes'}</span>
-                          <span>
-                            {child.lastStatus
-                              ? `Last ${child.lastStatus === 'sign_in' ? 'signed in' : 'signed out'}`
-                              : 'No check-ins yet'}
-                          </span>
-                          <span>
-                            {child.lastActionAt ? new Date(child.lastActionAt).toLocaleString() : ''}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => handleSelectChild(child)}
-                      >
-                        View details
-                      </button>
-                    </article>
-                  ))
-                )}
-              </div>
-            </section>
-          </>
-        ) : view === 'child' && selectedChild ? (
-          <section className="panel">
-            <div className="panel__heading">
-              <h2>{selectedChild.name}</h2>
-              <div className="panel__actions">
-                <button type="button" className="ghost" onClick={handleBackToList}>
-                  Back to list
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={isUpdatingChildStatus}
-                  onClick={() => handleChildCheckin('sign_in')}
-                >
-                  Sign in
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={isUpdatingChildStatus}
-                  onClick={() => handleChildCheckin('sign_out')}
-                >
-                  Sign out
-                </button>
-              </div>
+      {view === 'register' ? (
+        <section className="panel">
+          <div className="panel__heading">
+            <h2>Register instructor</h2>
+            <button type="button" className="ghost" onClick={() => setView('list')}>
+              Back to list
+            </button>
+          </div>
+          {registerInstructorForm}
+        </section>
+      ) : view === 'child' && selectedChild ? (
+        <section className="panel">
+          <div className="panel__heading">
+            <h2>{selectedChild.name}</h2>
+            <div className="panel__actions">
+              <button type="button" className="ghost" onClick={handleBackToList}>
+                Back to list
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={isUpdatingChildStatus}
+                onClick={() => handleChildCheckin('sign_in')}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={isUpdatingChildStatus}
+                onClick={() => handleChildCheckin('sign_out')}
+              >
+                Sign out
+              </button>
             </div>
-
-            <div className="card card--stack">
-              <div className="card__title">
-                <h3>Child details</h3>
-                {selectedChild.age && <span className="badge">Age {selectedChild.age}</span>}
-              </div>
+          </div>
+          <div className="card card--stack">
+            <div>
               <div className="meta">
                 <span>Class: {selectedChild.classCategory || 'Unassigned'}</span>
-                <span>Assigned: {teacherLookup[selectedChild.teacherId] || 'Unassigned'}</span>
                 <span>Guardian: {selectedChild.guardianName || 'No guardian listed'}</span>
                 <span>Contact: {selectedChild.guardianContact || 'No contact listed'}</span>
-                <span>Sex: {selectedChild.sex || 'Not specified'}</span>
-                <span>Date of birth: {selectedChild.dateOfBirth || 'Not provided'}</span>
-                <span>Allergies: {selectedChild.allergies || 'None listed'}</span>
-                <span>
-                  Photos allowed: {selectedChild.allowPhotos ? 'Yes' : 'No'}
-                </span>
-                <span>Notes: {selectedChild.notes || 'No notes'}</span>
-                <span>
-                  Status:{' '}
-                  {selectedChild.lastStatus
-                    ? selectedChild.lastStatus === 'sign_in'
-                      ? 'Signed in'
-                      : 'Signed out'
-                    : 'No check-ins yet'}
-                </span>
-                <span>
-                  Last action:{' '}
-                  {selectedChild.lastActionAt
-                    ? new Date(selectedChild.lastActionAt).toLocaleString()
-                    : '—'}
-                </span>
+                <span>Assigned: {teacherLookup[selectedChild.teacherId] || 'Unassigned'}</span>
+              </div>
+              <p className="muted">Last status: {selectedChild.lastStatus || 'No activity yet'}</p>
+            </div>
+            <div className="qr-code">
+              <QRCodeCanvas value={qrCodeValue} size={180} includeMargin />
+              <p className="muted">Scan to open child record.</p>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <div className="app__main">
+          <section className="panel">
+            <div className="panel__heading">
+              <h2>Instructors</h2>
+              <div className="panel__actions">
+                <button type="button" className="ghost" onClick={() => setView('register')}>
+                  Register instructor
+                </button>
               </div>
             </div>
-
-            <div className="card card--stack">
-              <div className="card__title">
-                <h3>QR code</h3>
-              </div>
-              {qrCodeValue ? (
-                <div className="qr-code">
-                  <QRCodeCanvas value={qrCodeValue} size={180} includeMargin />
-                  <p className="muted">Scan to open child record.</p>
-                </div>
+            <div className="list">
+              {verifiedTeachers.length === 0 ? (
+                <p className="empty">No verified instructors yet. Add your first instructor above.</p>
               ) : (
-                <p className="muted">No QR code available.</p>
+                verifiedTeachers.map((teacher) => (
+                  <article key={teacher.id} className="card">
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div
+                          style={{
+                            width: 42,
+                            height: 42,
+                            borderRadius: '50%',
+                            overflow: 'hidden',
+                            background: '#e0e7ff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: '#4859f0',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {teacher.photoUrl ? (
+                            <img
+                              src={teacher.photoUrl}
+                              alt={teacher.name}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                          ) : (
+                            <span>{teacher.name.slice(0, 1).toUpperCase()}</span>
+                          )}
+                        </div>
+                        <div>
+                          <h3>{teacher.name}</h3>
+                          <p className="muted">{teacher.role}</p>
+                        </div>
+                      </div>
+                      <div className="meta">
+                        <span>{teacher.email || 'No email'}</span>
+                        <span>{teacher.phone || 'No phone'}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => handleDeleteTeacher(teacher.id)}
+                    >
+                      Remove
+                    </button>
+                  </article>
+                ))
+              )}
+            </div>
+            <div className="panel__sublist">
+              <h3>Pending Instructor Verifications</h3>
+              {pendingTeachers.length === 0 ? (
+                <p className="empty">No pending verifications.</p>
+              ) : (
+                pendingTeachers.map((teacher) => (
+                  <article key={teacher.id} className="card">
+                    <div>
+                      <h4>{teacher.name}</h4>
+                      <p className="muted">{teacher.role}</p>
+                      <span>{teacher.email}</span>
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => handleVerifyTeacher(teacher.id)}
+                      >
+                        Verify
+                      </button>
+                    </div>
+                  </article>
+                ))
               )}
             </div>
           </section>
-        ) : (
           <section className="panel">
             <div className="panel__heading">
-              <h2>Register instructor</h2>
-              <button type="button" className="ghost" onClick={() => setView('list')}>
-                Back to list
-              </button>
+              <h2>Children</h2>
+              <div className="panel__actions">
+                <input
+                  className="search"
+                  type="search"
+                  placeholder="Search children"
+                  value={childSearch}
+                  onChange={(event) => setChildSearch(event.target.value)}
+                />
+              </div>
             </div>
-            {registerInstructorForm}
+            <div className="list">
+              {filteredChildren.length === 0 ? (
+                <p className="empty">No children found.</p>
+              ) : (
+                filteredChildren.map((child) => (
+                  <article key={child.id} className="card">
+                    <div>
+                      <h3>{child.name}</h3>
+                      <p className="muted">Class: {child.classCategory || 'Unassigned'}</p>
+                      <div className="meta">
+                        <span>Guardian: {child.guardianName || 'No guardian listed'}</span>
+                        <span>Contact: {child.guardianContact || 'No contact listed'}</span>
+                        <span>Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => {
+                        setSelectedChild(child);
+                        setView('child');
+                      }}
+                    >
+                      View details
+                    </button>
+                  </article>
+                ))
+              )}
+            </div>
           </section>
-        )}
-      </main>
+        </div>
+      )}
     </div>
   );
 }
