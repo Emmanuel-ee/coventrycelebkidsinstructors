@@ -202,15 +202,15 @@ function App() {
         return;
       }
 
+      const mappedTeachers = (teachersResponse.data || []).map(mapTeacherFromDb);
+      const mappedChildren = (childrenResponse.data || []).map(mapChildFromDb);
       setRecords({
-        teachers: (teachersResponse.data || []).map(mapTeacherFromDb),
-        children: (childrenResponse.data || []).map(mapChildFromDb),
+        teachers: mappedTeachers,
+        children: mappedChildren,
       });
       const storedId = localStorage.getItem(SIGNED_IN_KEY);
       if (storedId) {
-        const matched = (teachersResponse.data || [])
-          .map(mapTeacherFromDb)
-          .find((teacher) => teacher.id === storedId);
+        const matched = mappedTeachers.find((teacher) => teacher.id === storedId);
         if (matched) {
           setCurrentInstructor(matched);
           setView('home');
@@ -946,42 +946,56 @@ function App() {
     setStatusWithActor('Instructor verified.');
   };
 
-  const pendingTeachers = records.teachers.filter((teacher) => !teacher.verified);
-  const verifiedTeachers = records.teachers
-    .filter((teacher) => teacher.verified)
-    .slice()
-    .sort((a, b) => {
-      const aLead = a.role?.toLowerCase().includes('lead') ? 1 : 0;
-      const bLead = b.role?.toLowerCase().includes('lead') ? 1 : 0;
-      if (aLead !== bLead) {
-        return bLead - aLead;
-      }
-      return (a.name || '').localeCompare(b.name || '');
-    });
+  const pendingTeachers = React.useMemo(
+    () => records.teachers.filter((teacher) => !teacher.verified),
+    [records.teachers]
+  );
+  const verifiedTeachers = React.useMemo(
+    () =>
+      records.teachers
+        .filter((teacher) => teacher.verified)
+        .slice()
+        .sort((a, b) => {
+          const aLead = a.role?.toLowerCase().includes('lead') ? 1 : 0;
+          const bLead = b.role?.toLowerCase().includes('lead') ? 1 : 0;
+          if (aLead !== bLead) {
+            return bLead - aLead;
+          }
+          return (a.name || '').localeCompare(b.name || '');
+        }),
+    [records.teachers]
+  );
 
   const isLeadInstructor = currentInstructor?.role?.toLowerCase().includes('lead');
 
-  const filteredChildren = records.children.filter((child) => {
+  const filteredChildren = React.useMemo(() => {
     if (!childSearch.trim()) {
-      return true;
+      return records.children;
     }
     const query = childSearch.trim().toLowerCase();
-    return (
-      child.name?.toLowerCase().includes(query) ||
-      child.guardianName?.toLowerCase().includes(query) ||
-      child.guardianContact?.toLowerCase().includes(query) ||
-      child.classCategory?.toLowerCase().includes(query)
+    return records.children.filter((child) =>
+      [child.name, child.guardianName, child.guardianContact, child.classCategory]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(query))
     );
-  });
+  }, [records.children, childSearch]);
 
-  const teacherLookup = records.teachers.reduce((acc, teacher) => {
-    acc[teacher.id] = teacher.name;
-    return acc;
-  }, {});
+  const teacherLookup = React.useMemo(
+    () =>
+      records.teachers.reduce((acc, teacher) => {
+        acc[teacher.id] = teacher.name;
+        return acc;
+      }, {}),
+    [records.teachers]
+  );
 
-  const assignedChildren = selectedTeacher
-    ? records.children.filter((child) => child.teacherId === selectedTeacher.id)
-    : [];
+  const assignedChildren = React.useMemo(
+    () =>
+      selectedTeacher
+        ? records.children.filter((child) => child.teacherId === selectedTeacher.id)
+        : [],
+    [records.children, selectedTeacher]
+  );
 
   const qrCodeValue = selectedChild
     ? `${window.location.origin}${process.env.PUBLIC_URL || ''}/?scan=${
@@ -1140,9 +1154,23 @@ function App() {
                 </p>
               </div>
             </div>
-            <button type="button" className="ghost signedin__action" onClick={handleSignOut}>
-              Sign out
-            </button>
+            <div className="signedin__actions">
+              <button
+                type="button"
+                className="ghost signedin__action"
+                onClick={() => {
+                  if (currentInstructor) {
+                    setSelectedTeacher(currentInstructor);
+                  }
+                  setView('profile');
+                }}
+              >
+                Update profile
+              </button>
+              <button type="button" className="ghost signedin__action" onClick={handleSignOut}>
+                Sign out
+              </button>
+            </div>
           </div>
         )}
         {isLoading && <p className="banner banner--info">Loading records…</p>}
@@ -1249,15 +1277,6 @@ function App() {
               <button type="button" className="ghost" onClick={handleBackToInstructors}>
                 Back to instructors
               </button>
-              {currentInstructor?.id === selectedTeacher.id && (
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => setView('profile')}
-                >
-                  Update profile
-                </button>
-              )}
               {!selectedTeacher.verified && isLeadInstructor && (
                 <>
                   <button

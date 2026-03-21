@@ -345,6 +345,13 @@ textarea {
   gap: 12px;
 }
 
+.signedin__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .signedin__label {
   margin: 0;
   font-size: 0.7rem;
