@@ -138,6 +138,12 @@ function App() {
     teacherId: '',
     teacherName: '',
   });
+  const [attendanceStartDate, setAttendanceStartDate] = React.useState(() =>
+    new Date().toISOString().slice(0, 10)
+  );
+  const [attendanceEndDate, setAttendanceEndDate] = React.useState(() =>
+    new Date().toISOString().slice(0, 10)
+  );
 
   const downloadRecentAttendance = React.useCallback(async () => {
     if (!isSupabaseEnabled || !supabasePublic) {
@@ -146,13 +152,25 @@ function App() {
     }
     setError('');
     setSupabaseStatus('');
-    const now = new Date();
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
+    if (!attendanceStartDate || !attendanceEndDate) {
+      setError('Please select a start and end date for attendance.');
+      return;
+    }
+    const startOfDay = new Date(`${attendanceStartDate}T00:00:00`);
+    const endOfDay = new Date(`${attendanceEndDate}T23:59:59.999`);
+    if (Number.isNaN(startOfDay.getTime()) || Number.isNaN(endOfDay.getTime())) {
+      setError('Please provide valid attendance dates.');
+      return;
+    }
+    if (startOfDay > endOfDay) {
+      setError('Attendance start date must be before the end date.');
+      return;
+    }
     const { data, error: fetchError } = await supabasePublic
       .from('checkins')
       .select('child_id, action, created_at')
       .gte('created_at', startOfDay.toISOString())
+      .lte('created_at', endOfDay.toISOString())
       .order('created_at', { ascending: false });
     if (fetchError) {
       setError(`Unable to download attendance. ${fetchError.message}`);
@@ -223,7 +241,7 @@ function App() {
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `attendance-${startOfDay.toISOString().slice(0, 10)}.csv`;
+  link.download = `attendance-${attendanceStartDate}-to-${attendanceEndDate}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -233,7 +251,7 @@ function App() {
       return;
     }
     setSupabaseStatus('Attendance downloaded.');
-  }, [records.children]);
+  }, [attendanceEndDate, attendanceStartDate, records.children]);
 
   React.useEffect(() => {
     if (!isSupabaseEnabled) {
@@ -1412,16 +1430,32 @@ function App() {
               </span>
               <span className="home__arrow">→</span>
             </button>
+          </div>
+          <div className="attendance-controls">
+            <div className="attendance-controls__dates">
+              <label>
+                Attendance start
+                <input
+                  type="date"
+                  value={attendanceStartDate}
+                  onChange={(event) => setAttendanceStartDate(event.target.value)}
+                />
+              </label>
+              <label>
+                Attendance end
+                <input
+                  type="date"
+                  value={attendanceEndDate}
+                  onChange={(event) => setAttendanceEndDate(event.target.value)}
+                />
+              </label>
+            </div>
             <button
               type="button"
-              className="ghost home__button"
+              className="ghost attendance-controls__download"
               onClick={downloadRecentAttendance}
             >
-              <span>
-                <strong>Download attendance</strong>
-                <span className="home__hint">Get today&apos;s recent check-ins</span>
-              </span>
-              <span className="home__arrow">↓</span>
+              Download attendance
             </button>
           </div>
         </section>
