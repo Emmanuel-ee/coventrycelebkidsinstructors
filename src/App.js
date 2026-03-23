@@ -81,6 +81,17 @@ const isUuid = (value) =>
     value
   );
 
+const toCsvValue = (value) => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const text = String(value).replace(/\r?\n/g, ' ').trim();
+  if (/[",]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+};
+
 function App() {
   const attendanceActive = true;
   const [pendingVerification, setPendingVerification] = React.useState(false);
@@ -127,6 +138,102 @@ function App() {
     teacherId: '',
     teacherName: '',
   });
+
+  const downloadRecentAttendance = React.useCallback(async () => {
+    if (!isSupabaseEnabled || !supabasePublic) {
+      setError('Attendance download requires Supabase to be configured.');
+      return;
+    }
+    setError('');
+    setSupabaseStatus('');
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const { data, error: fetchError } = await supabasePublic
+      .from('checkins')
+      .select('child_id, action, created_at')
+      .gte('created_at', startOfDay.toISOString())
+      .order('created_at', { ascending: false });
+    if (fetchError) {
+      setError(`Unable to download attendance. ${fetchError.message}`);
+      return;
+    }
+    const latestByChild = new Map();
+    (data || []).forEach((checkin) => {
+      if (!latestByChild.has(checkin.child_id)) {
+        latestByChild.set(checkin.child_id, {
+          childId: checkin.child_id,
+          signInAt: null,
+          signOutAt: null,
+          lastStatus: checkin.action,
+          lastTimestamp: checkin.created_at,
+        });
+      }
+      const entry = latestByChild.get(checkin.child_id);
+      if (checkin.action === 'sign_in' && !entry.signInAt) {
+        entry.signInAt = checkin.created_at;
+      }
+      if (checkin.action === 'sign_out' && !entry.signOutAt) {
+        entry.signOutAt = checkin.created_at;
+      }
+    });
+    const rows = Array.from(latestByChild.values()).map((entry) => {
+      const child = records.children.find((item) => item.id === entry.childId);
+      return {
+        childName: child?.name || 'Unknown child',
+        guardianName: child?.guardianName || '',
+        guardianContact: child?.guardianContact || '',
+        classCategory: child?.classCategory || '',
+        signInAt: entry.signInAt || '',
+        signOutAt: entry.signOutAt || '',
+        status: entry.lastStatus === 'sign_in' ? 'Signed in' : 'Signed out',
+        lastTimestamp: entry.lastTimestamp,
+      };
+    });
+    const header = [
+      'Child Name',
+      'Guardian',
+      'Contact',
+      'Class',
+      'Signed in at',
+      'Signed out at',
+      'Last status',
+      'Last status time',
+    ];
+    const csvLines = [
+      header.map(toCsvValue).join(','),
+      ...rows.map((row) =>
+        [
+          row.childName,
+          row.guardianName,
+          row.guardianContact,
+          row.classCategory,
+          row.signInAt,
+          row.signOutAt,
+          row.status,
+          row.lastTimestamp,
+        ]
+          .map(toCsvValue)
+          .join(',')
+      ),
+    ];
+    const blob = new Blob([`${csvLines.join('\n')}\n`], {
+      type: 'text/csv;charset=utf-8;'
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `attendance-${startOfDay.toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    if (rows.length === 0) {
+      setSupabaseStatus('No attendance records were found for today.');
+      return;
+    }
+    setSupabaseStatus('Attendance downloaded.');
+  }, [records.children]);
 
   React.useEffect(() => {
     if (!isSupabaseEnabled) {
@@ -1305,6 +1412,17 @@ function App() {
               </span>
               <span className="home__arrow">→</span>
             </button>
+            <button
+              type="button"
+              className="ghost home__button"
+              onClick={downloadRecentAttendance}
+            >
+              <span>
+                <strong>Download attendance</strong>
+                <span className="home__hint">Get today&apos;s recent check-ins</span>
+              </span>
+              <span className="home__arrow">↓</span>
+            </button>
           </div>
         </section>
       ) : activeView === 'register' ? (
@@ -1650,7 +1768,7 @@ function App() {
       ) : activeView === 'children' ? (
         <section className="panel">
           <div className="panel__heading">
-            <h2>Children</h2>
+            <h2>Celebkids / Teens</h2>
             <div className="panel__actions">
               <button type="button" className="ghost" onClick={handleBackToHome} aria-label="Back">
                 ←
