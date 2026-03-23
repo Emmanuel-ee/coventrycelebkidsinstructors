@@ -1685,9 +1685,17 @@ function App() {
                   <h3 className="list-section__title">{group.category}</h3>
                   <div className="list">
                     {group.children.map((child) => (
-                      <article key={child.id} className="card">
+                      <article
+                        key={child.id}
+                        className={`card${child.signedIn ? ' card--signedin' : ''}`}
+                      >
                         <div>
-                          <h4>{child.name}</h4>
+                          <div className="card__title">
+                            <h4>{child.name}</h4>
+                            {child.signedIn && (
+                              <span className="badge badge--signedin">Signed in</span>
+                            )}
+                          </div>
                           <div className="meta">
                             <span>Age: {child.age || 'Not provided'}</span>
                             <span>Guardian: {child.guardianName || 'No guardian listed'}</span>
