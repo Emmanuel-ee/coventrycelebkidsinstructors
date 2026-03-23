@@ -2,7 +2,7 @@ import React from 'react';
 import bcrypt from 'bcryptjs';
 import { QRCodeCanvas } from 'qrcode.react';
 import './App.css';
-import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
+import { isSupabaseEnabled, supabase, supabasePublic } from './lib/supabaseClient';
 
 const STORAGE_KEY = 'celebkids-records-v1';
 const SIGNED_IN_KEY = 'celebkids-instructor-id';
@@ -188,8 +188,8 @@ function App() {
       setError('');
       setSupabaseStatus('');
       const [teachersResponse, childrenResponse] = await Promise.all([
-        supabase.from('teachers').select('*').order('created_at', { ascending: false }),
-        supabase.from('children').select('*').order('created_at', { ascending: false }),
+        supabasePublic.from('teachers').select('*').order('created_at', { ascending: false }),
+        supabasePublic.from('children').select('*').order('created_at', { ascending: false }),
       ]);
 
       if (!isActive) {
@@ -282,7 +282,7 @@ function App() {
       (teacher) => teacher.email?.toLowerCase() === email
     );
     if (!instructor && isSupabaseEnabled) {
-      const { data, error: fetchError } = await supabase
+      const { data, error: fetchError } = await supabasePublic
         .from('teachers')
         .select('*')
         .ilike('email', email)

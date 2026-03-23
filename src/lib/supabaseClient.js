@@ -29,3 +29,13 @@ export const supabaseConfigMessage = getConfigMessage();
 export const supabase = isSupabaseEnabled
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
+
+export const supabasePublic = isSupabaseEnabled
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  })
+  : null;
