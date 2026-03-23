@@ -64,6 +64,34 @@ const mapChildFromDb = (child) => ({
   createdAt: child.created_at || child.createdAt || new Date().toISOString(),
 });
 
+const mapAvailabilityFromDb = (availability) => ({
+  id: availability.id,
+  instructorId: availability.instructor_id || availability.instructorId || '',
+  instructorName: availability.instructor_name || availability.instructorName || '',
+  date: availability.date || availability.available_date || availability.availableDate || '',
+  startTime: availability.start_time || availability.startTime || '',
+  endTime: availability.end_time || availability.endTime || '',
+  notes: availability.notes || '',
+  status: availability.status || 'pending',
+  approvedBy: availability.approved_by || availability.approvedBy || '',
+  approvedAt: availability.approved_at || availability.approvedAt || '',
+  createdAt: availability.created_at || availability.createdAt || new Date().toISOString(),
+});
+
+const mapAvailabilityToDb = (availability) => ({
+  id: availability.id,
+  instructor_id: availability.instructorId,
+  instructor_name: availability.instructorName,
+  date: availability.date || null,
+  start_time: availability.startTime || null,
+  end_time: availability.endTime || null,
+  notes: availability.notes || null,
+  status: availability.status || 'pending',
+  approved_by: availability.approvedBy || null,
+  approved_at: availability.approvedAt || null,
+  created_at: availability.createdAt || new Date().toISOString(),
+});
+
 const mapTeacherToDb = (teacher) => ({
   id: teacher.id,
   name: teacher.name,
@@ -144,6 +172,14 @@ function App() {
   const [attendanceEndDate, setAttendanceEndDate] = React.useState(() =>
     new Date().toISOString().slice(0, 10)
   );
+  const [availabilityEntries, setAvailabilityEntries] = React.useState([]);
+  const [availabilityForm, setAvailabilityForm] = React.useState({
+    date: '',
+    startTime: '',
+    endTime: '',
+    notes: '',
+  });
+  const [isSubmittingAvailability, setIsSubmittingAvailability] = React.useState(false);
 
   const downloadRecentAttendance = React.useCallback(async () => {
     if (!isSupabaseEnabled || !supabasePublic) {
@@ -253,6 +289,30 @@ function App() {
     setSupabaseStatus('Attendance downloaded.');
   }, [attendanceEndDate, attendanceStartDate, records.children]);
 
+  const fetchAvailability = React.useCallback(async () => {
+    if (!supabasePublic) {
+      return;
+    }
+    const { data, error: fetchError } = await supabasePublic
+      .from('availability')
+      .select('*')
+      .order('date', { ascending: true })
+      .order('start_time', { ascending: true });
+    if (fetchError) {
+      setError(`Unable to load availability. ${fetchError.message}`);
+      return;
+    }
+    setAvailabilityEntries((data || []).map(mapAvailabilityFromDb));
+  }, []);
+
+  const handleAvailabilityFormChange = (event) => {
+    const { name, value } = event.target;
+    setAvailabilityForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
   React.useEffect(() => {
     if (!isSupabaseEnabled) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
@@ -353,6 +413,10 @@ function App() {
       isActive = false;
     };
   }, []);
+
+  React.useEffect(() => {
+    fetchAvailability();
+  }, [fetchAvailability]);
 
   const handleTeacherChange = (event) => {
     const { name, value, files, type } = event.target;
@@ -1094,6 +1158,115 @@ function App() {
 
   const isLeadInstructor = currentInstructor?.role?.toLowerCase().includes('lead');
 
+  const approvedAvailability = React.useMemo(
+    () => availabilityEntries.filter((entry) => entry.status === 'approved'),
+    [availabilityEntries]
+  );
+  const pendingAvailability = React.useMemo(
+    () => availabilityEntries.filter((entry) => entry.status === 'pending'),
+    [availabilityEntries]
+  );
+  const myAvailability = React.useMemo(
+    () =>
+      availabilityEntries.filter((entry) => entry.instructorId === currentInstructor?.id),
+    [availabilityEntries, currentInstructor]
+  );
+
+  const handleAvailabilitySubmit = async (event) => {
+    event.preventDefault();
+    if (!currentInstructor) {
+      setError('Please sign in before submitting availability.');
+      return;
+    }
+    if (!availabilityForm.date || !availabilityForm.startTime || !availabilityForm.endTime) {
+      setError('Please provide date, start time, and end time for availability.');
+      return;
+    }
+    setIsSubmittingAvailability(true);
+    setError('');
+    setSupabaseStatus('');
+    const newEntry = {
+      id: createId(),
+      instructorId: currentInstructor.id,
+      instructorName: currentInstructor.name,
+      date: availabilityForm.date,
+      startTime: availabilityForm.startTime,
+      endTime: availabilityForm.endTime,
+      notes: availabilityForm.notes,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      if (isSupabaseEnabled) {
+        const { data, error: insertError } = await supabase
+          .from('availability')
+          .insert([mapAvailabilityToDb(newEntry)])
+          .select('*')
+          .maybeSingle();
+        if (insertError) {
+          setError(`Unable to submit availability. ${insertError.message}`);
+          return;
+        }
+        if (data) {
+          setAvailabilityEntries((prev) => [mapAvailabilityFromDb(data), ...prev]);
+        }
+      } else {
+        setAvailabilityEntries((prev) => [newEntry, ...prev]);
+      }
+      setAvailabilityForm({ date: '', startTime: '', endTime: '', notes: '' });
+      setSupabaseStatus('Availability submitted for review.');
+    } finally {
+      setIsSubmittingAvailability(false);
+    }
+  };
+
+  const handleAvailabilityStatus = async (entryId, status) => {
+    if (!isLeadInstructor) {
+      setError('Only the lead instructor can approve availability.');
+      return;
+    }
+    setError('');
+    setSupabaseStatus('');
+    const nextStatus = status === 'approved' ? 'approved' : 'declined';
+    if (isSupabaseEnabled) {
+      const { data, error: updateError } = await supabase
+        .from('availability')
+        .update({
+          status: nextStatus,
+          approved_by: currentInstructor?.id || null,
+          approved_at: new Date().toISOString(),
+        })
+        .eq('id', entryId)
+        .select('*')
+        .maybeSingle();
+      if (updateError) {
+        setError(`Unable to update availability. ${updateError.message}`);
+        return;
+      }
+      if (data) {
+        setAvailabilityEntries((prev) =>
+          prev.map((entry) =>
+            entry.id === entryId ? mapAvailabilityFromDb(data) : entry
+          )
+        );
+      }
+    } else {
+      setAvailabilityEntries((prev) =>
+        prev.map((entry) =>
+          entry.id === entryId
+            ? {
+              ...entry,
+              status: nextStatus,
+              approvedBy: currentInstructor?.id || '',
+              approvedAt: new Date().toISOString(),
+            }
+            : entry
+        )
+      );
+    }
+    setSupabaseStatus(`Availability ${nextStatus}.`);
+  };
+
   const filteredChildren = React.useMemo(() => {
     if (!childSearch.trim()) {
       return records.children;
@@ -1430,6 +1603,17 @@ function App() {
               </span>
               <span className="home__arrow">→</span>
             </button>
+            <button
+              type="button"
+              className="ghost home__button"
+              onClick={() => setView('availability')}
+            >
+              <span>
+                <strong>Availability</strong>
+                <span className="home__hint">Submit and review availability</span>
+              </span>
+              <span className="home__arrow">→</span>
+            </button>
           </div>
           <div className="attendance-controls">
             <div className="attendance-controls__dates">
@@ -1457,6 +1641,158 @@ function App() {
             >
               Download attendance
             </button>
+          </div>
+        </section>
+      ) : activeView === 'availability' ? (
+        <section className="panel">
+          <div className="panel__heading">
+            <div>
+              <h2>Availability</h2>
+              <p className="panel__intro">
+                Submit your availability and view the approved schedule.
+              </p>
+            </div>
+            <button type="button" className="ghost" onClick={() => setView('home')}>
+              Back to home
+            </button>
+          </div>
+          <form className="form availability-form" onSubmit={handleAvailabilitySubmit}>
+            <div className="form__grid">
+              <label>
+                Date
+                <input
+                  type="date"
+                  name="date"
+                  value={availabilityForm.date}
+                  onChange={handleAvailabilityFormChange}
+                  required
+                />
+              </label>
+              <label>
+                Start time
+                <input
+                  type="time"
+                  name="startTime"
+                  value={availabilityForm.startTime}
+                  onChange={handleAvailabilityFormChange}
+                  required
+                />
+              </label>
+              <label>
+                End time
+                <input
+                  type="time"
+                  name="endTime"
+                  value={availabilityForm.endTime}
+                  onChange={handleAvailabilityFormChange}
+                  required
+                />
+              </label>
+              <label className="form__full">
+                Notes (optional)
+                <textarea
+                  name="notes"
+                  value={availabilityForm.notes}
+                  onChange={handleAvailabilityFormChange}
+                  placeholder="Add any extra details"
+                />
+              </label>
+            </div>
+            <button type="submit" className="primary" disabled={isSubmittingAvailability}>
+              {isSubmittingAvailability ? 'Submitting…' : 'Submit availability'}
+            </button>
+          </form>
+
+          <div className="availability-section">
+            <h3>My submissions</h3>
+            {myAvailability.length === 0 ? (
+              <p className="empty">No availability submitted yet.</p>
+            ) : (
+              <div className="list">
+                {myAvailability.map((entry) => (
+                  <div key={entry.id} className="card availability-card">
+                    <div>
+                      <div className="availability-card__title">
+                        <strong>{entry.date}</strong>
+                        <span className={`availability-status availability-status--${entry.status}`}>
+                          {entry.status}
+                        </span>
+                      </div>
+                      <p className="muted">
+                        {entry.startTime} - {entry.endTime}
+                      </p>
+                      {entry.notes && <p className="muted">{entry.notes}</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {isLeadInstructor && (
+            <div className="availability-section">
+              <h3>Pending approvals</h3>
+              {pendingAvailability.length === 0 ? (
+                <p className="empty">No pending availability.</p>
+              ) : (
+                <div className="list">
+                  {pendingAvailability.map((entry) => (
+                    <div key={entry.id} className="card availability-card">
+                      <div>
+                        <div className="availability-card__title">
+                          <strong>{entry.instructorName || 'Instructor'}</strong>
+                          <span className="availability-status availability-status--pending">Pending</span>
+                        </div>
+                        <p className="muted">
+                          {entry.date} · {entry.startTime} - {entry.endTime}
+                        </p>
+                        {entry.notes && <p className="muted">{entry.notes}</p>}
+                      </div>
+                      <div className="panel__actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => handleAvailabilityStatus(entry.id, 'approved')}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => handleAvailabilityStatus(entry.id, 'declined')}
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="availability-section">
+            <h3>Approved availability calendar</h3>
+            {approvedAvailability.length === 0 ? (
+              <p className="empty">No approved availability yet.</p>
+            ) : (
+              <div className="list">
+                {approvedAvailability.map((entry) => (
+                  <div key={entry.id} className="card availability-card">
+                    <div>
+                      <div className="availability-card__title">
+                        <strong>{entry.instructorName || 'Instructor'}</strong>
+                        <span className="availability-status availability-status--approved">Approved</span>
+                      </div>
+                      <p className="muted">
+                        {entry.date} · {entry.startTime} - {entry.endTime}
+                      </p>
+                      {entry.notes && <p className="muted">{entry.notes}</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
       ) : activeView === 'register' ? (
