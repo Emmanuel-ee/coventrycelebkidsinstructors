@@ -6,6 +6,7 @@ import { isSupabaseEnabled, supabase, supabasePublic } from './lib/supabaseClien
 
 const STORAGE_KEY = 'celebkids-records-v1';
 const SIGNED_IN_KEY = 'celebkids-instructor-id';
+const AVAILABILITY_RULES_KEY = 'celebkids-availability-rules-v1';
 const EMPTY_RECORDS = { teachers: [], children: [] };
 const INSTRUCTOR_PHOTOS_BUCKET =
   process.env.REACT_APP_INSTRUCTOR_PHOTOS_BUCKET || 'instructor-photos';
@@ -26,6 +27,39 @@ const loadLocalRecords = () => {
   } catch (error) {
     return EMPTY_RECORDS;
   }
+};
+
+const loadLocalAvailabilityRules = () => {
+  try {
+    const stored = localStorage.getItem(AVAILABILITY_RULES_KEY);
+    if (!stored) {
+      return [];
+    }
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch (error) {
+    return [];
+  }
+};
+
+const normalizeAvailabilityDetails = (value) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (typeof item === 'string') {
+        return { date: item, occasion: '' };
+      }
+      if (item && typeof item === 'object') {
+        return {
+          date: item.date || item.value || '',
+          occasion: item.occasion || item.label || '',
+        };
+      }
+      return null;
+    })
+    .filter((item) => item && item.date);
 };
 
 const mapTeacherFromDb = (teacher) => ({
@@ -72,6 +106,8 @@ const mapAvailabilityFromDb = (availability) => ({
   startTime: availability.start_time || availability.startTime || '',
   endTime: availability.end_time || availability.endTime || '',
   notes: availability.notes || '',
+  changeReason: availability.change_reason || availability.changeReason || '',
+  approvalReason: availability.approval_reason || availability.approvalReason || '',
   status: availability.status || 'pending',
   approvedBy: availability.approved_by || availability.approvedBy || '',
   approvedAt: availability.approved_at || availability.approvedAt || '',
@@ -86,6 +122,8 @@ const mapAvailabilityToDb = (availability) => ({
   start_time: availability.startTime || null,
   end_time: availability.endTime || null,
   notes: availability.notes || null,
+  change_reason: availability.changeReason || null,
+  approval_reason: availability.approvalReason || null,
   status: availability.status || 'pending',
   approved_by: availability.approvedBy || null,
   approved_at: availability.approvedAt || null,
@@ -118,6 +156,69 @@ const toCsvValue = (value) => {
     return `"${text.replace(/"/g, '""')}"`;
   }
   return text;
+};
+
+const isSundayDate = (dateValue) => {
+  if (!dateValue) {
+    return false;
+  }
+  const parsed = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return false;
+  }
+  return parsed.getDay() === 0;
+};
+
+const formatLocalDateValue = (dateValue) => {
+  const year = dateValue.getFullYear();
+  const month = String(dateValue.getMonth() + 1).padStart(2, '0');
+  const day = String(dateValue.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getUpcomingSundays = (count = 12) => {
+  const results = [];
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dayOffset = (7 - start.getDay()) % 7;
+  const firstSunday = new Date(start);
+  firstSunday.setDate(start.getDate() + dayOffset);
+  for (let index = 0; index < count; index += 1) {
+    const nextSunday = new Date(firstSunday);
+    nextSunday.setDate(firstSunday.getDate() + index * 7);
+    results.push(formatLocalDateValue(nextSunday));
+  }
+  return results;
+};
+
+const formatAvailabilityDateLabel = (dateValue) => {
+  if (!dateValue) {
+    return '';
+  }
+  const parsed = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return dateValue;
+  }
+  return parsed.toLocaleDateString(undefined, {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  });
+};
+
+const formatAvailabilityStatus = (status) => {
+  switch (status) {
+    case 'approved':
+      return 'Approved';
+    case 'declined':
+      return 'Declined';
+    case 'pending_delete':
+      return 'Delete requested';
+    case 'pending':
+      return 'Pending';
+    default:
+      return status || 'Pending';
+  }
 };
 
 function App() {
@@ -160,6 +261,7 @@ function App() {
     confirmPassword: '',
   });
   const [childSearch, setChildSearch] = React.useState('');
+  const [instructorSearch, setInstructorSearch] = React.useState('');
   const [classFilter, setClassFilter] = React.useState('all');
   const [deletePrompt, setDeletePrompt] = React.useState({
     isOpen: false,
@@ -178,7 +280,24 @@ function App() {
     startTime: '',
     endTime: '',
     notes: '',
+    changeReason: '',
   });
+  const [deleteRequest, setDeleteRequest] = React.useState({
+    entry: null,
+    reason: '',
+  });
+  const [updateRequest, setUpdateRequest] = React.useState({
+    entry: null,
+    reason: '',
+  });
+  const [availabilityEditOriginalDate, setAvailabilityEditOriginalDate] = React.useState('');
+  const [approvalReasons, setApprovalReasons] = React.useState({});
+  const [allowedAvailabilityDates, setAllowedAvailabilityDates] = React.useState([]);
+  const [allowedAvailabilityDetails, setAllowedAvailabilityDetails] = React.useState([]);
+  const [availabilityRuleDate, setAvailabilityRuleDate] = React.useState('');
+  const [availabilityRuleOccasion, setAvailabilityRuleOccasion] = React.useState('');
+  const [isSavingAvailabilityRules, setIsSavingAvailabilityRules] = React.useState(false);
+  const [availabilityEditId, setAvailabilityEditId] = React.useState(null);
   const [isSubmittingAvailability, setIsSubmittingAvailability] = React.useState(false);
 
   const downloadRecentAttendance = React.useCallback(async () => {
@@ -305,6 +424,114 @@ function App() {
     setAvailabilityEntries((data || []).map(mapAvailabilityFromDb));
   }, []);
 
+  const sortedAllowedAvailabilityDates = React.useMemo(() => {
+    return [...allowedAvailabilityDates].sort((a, b) => new Date(a) - new Date(b));
+  }, [allowedAvailabilityDates]);
+
+  const allowedAvailabilityDetailsByDate = React.useMemo(() => {
+    const map = new Map();
+    allowedAvailabilityDetails.forEach((item) => {
+      if (item?.date) {
+        map.set(item.date, item);
+      }
+    });
+    return map;
+  }, [allowedAvailabilityDetails]);
+
+  const selectableAvailabilityDates = React.useMemo(() => {
+    const combined = new Set(getUpcomingSundays(16));
+    allowedAvailabilityDates.forEach((dateValue) => combined.add(dateValue));
+    return Array.from(combined).sort((a, b) => new Date(a) - new Date(b));
+  }, [allowedAvailabilityDates]);
+
+  const selectableAvailabilityOptions = React.useMemo(() => {
+    return selectableAvailabilityDates.map((dateValue) => {
+      const isSunday = isSundayDate(dateValue);
+      const detail = allowedAvailabilityDetailsByDate.get(dateValue);
+      const occasionLabel = detail?.occasion
+        ? detail.occasion
+        : isSunday
+          ? 'Sunday service'
+          : '';
+      return {
+        date: dateValue,
+        label: occasionLabel
+          ? `${formatAvailabilityDateLabel(dateValue)} — ${occasionLabel}`
+          : formatAvailabilityDateLabel(dateValue),
+      };
+    });
+  }, [allowedAvailabilityDetailsByDate, selectableAvailabilityDates]);
+
+  const persistAvailabilityRules = React.useCallback(
+    async (nextDates, nextDetails, statusMessage) => {
+      setIsSavingAvailabilityRules(true);
+      setAllowedAvailabilityDates(nextDates);
+      setAllowedAvailabilityDetails(nextDetails);
+      localStorage.setItem(AVAILABILITY_RULES_KEY, JSON.stringify(nextDetails));
+      if (isSupabaseEnabled) {
+        const { error: updateError } = await supabase
+          .from('availability_rules')
+          .upsert({
+            id: 'default',
+            allowed_dates: nextDates,
+            allowed_date_details: nextDetails,
+            updated_by: currentInstructor?.id || null,
+            updated_at: new Date().toISOString(),
+          });
+        if (updateError) {
+          if (!/availability_rules|relation/i.test(updateError.message)) {
+            setError(`Unable to save availability rules. ${updateError.message}`);
+          } else {
+            setError('Availability rules table is missing. Create public.availability_rules.');
+          }
+          setIsSavingAvailabilityRules(false);
+          return;
+        }
+      }
+      if (statusMessage) {
+        setSupabaseStatus(statusMessage);
+      }
+      setIsSavingAvailabilityRules(false);
+    },
+    [currentInstructor]
+  );
+
+  const handleAddAllowedDate = async () => {
+    if (!availabilityRuleDate) {
+      setError('Select a date to allow.');
+      return;
+    }
+    if (isSundayDate(availabilityRuleDate)) {
+      setError('Sunday availability is already required for everyone.');
+      return;
+    }
+    if (!availabilityRuleOccasion.trim()) {
+      setError('Please add the occasion for this extra date.');
+      return;
+    }
+    if (allowedAvailabilityDates.includes(availabilityRuleDate)) {
+      setError('That date is already enabled.');
+      return;
+    }
+    const nextDetails = [
+      ...allowedAvailabilityDetails,
+      { date: availabilityRuleDate, occasion: availabilityRuleOccasion.trim() },
+    ];
+    await persistAvailabilityRules(
+      [...allowedAvailabilityDates, availabilityRuleDate],
+      nextDetails,
+      'Availability date added.'
+    );
+    setAvailabilityRuleDate('');
+    setAvailabilityRuleOccasion('');
+  };
+
+  const handleRemoveAllowedDate = async (dateValue) => {
+    const nextDates = allowedAvailabilityDates.filter((date) => date !== dateValue);
+    const nextDetails = allowedAvailabilityDetails.filter((item) => item.date !== dateValue);
+    await persistAvailabilityRules(nextDates, nextDetails, 'Availability date removed.');
+  };
+
   const handleAvailabilityFormChange = (event) => {
     const { name, value } = event.target;
     setAvailabilityForm((prev) => ({
@@ -318,6 +545,49 @@ function App() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
     }
   }, [records]);
+
+  React.useEffect(() => {
+    const localRules = normalizeAvailabilityDetails(loadLocalAvailabilityRules());
+    if (localRules.length) {
+      setAllowedAvailabilityDetails(localRules);
+      setAllowedAvailabilityDates(localRules.map((item) => item.date));
+    }
+    if (!isSupabaseEnabled || !supabasePublic) {
+      return undefined;
+    }
+    let isActive = true;
+    const fetchRules = async () => {
+      const { data, error: fetchError } = await supabasePublic
+        .from('availability_rules')
+        .select('*')
+        .eq('id', 'default')
+        .maybeSingle();
+      if (!isActive) {
+        return;
+      }
+      if (fetchError) {
+        if (!/availability_rules|relation/i.test(fetchError.message)) {
+          setError(`Unable to load availability rules. ${fetchError.message}`);
+        }
+        return;
+      }
+      if (data?.allowed_date_details && Array.isArray(data.allowed_date_details)) {
+        const details = normalizeAvailabilityDetails(data.allowed_date_details);
+        setAllowedAvailabilityDetails(details);
+        setAllowedAvailabilityDates(details.map((item) => item.date));
+        return;
+      }
+      if (data?.allowed_dates && Array.isArray(data.allowed_dates)) {
+        const fallbackDetails = normalizeAvailabilityDetails(data.allowed_dates);
+        setAllowedAvailabilityDetails(fallbackDetails);
+        setAllowedAvailabilityDates(fallbackDetails.map((item) => item.date));
+      }
+    };
+    fetchRules();
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (currentInstructor?.id) {
@@ -666,6 +936,13 @@ function App() {
     setView('instructor');
   };
 
+  const handleCardKeyDown = (event, callback) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      callback();
+    }
+  };
+
   const renderTeacherAvatar = (teacher, size = 42) => (
     <div
       style={{
@@ -793,6 +1070,33 @@ function App() {
       setError('Email is required for verification.');
       return;
     }
+    const emailValue = teacherForm.email.trim();
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailPattern.test(emailValue)) {
+      setError('Please provide a valid email address.');
+      return;
+    }
+    if (!teacherForm.role) {
+      setError('Please select a role.');
+      return;
+    }
+    const phoneValue = teacherForm.phone.trim();
+    if (phoneValue) {
+      if (/[A-Za-z]/.test(phoneValue)) {
+        setError('Phone number should not contain letters.');
+        return;
+      }
+      const onlyDigits = phoneValue.replace(/\D/g, '');
+      if (phoneValue.startsWith('+')) {
+        if (onlyDigits.length <= 11) {
+          setError('Phone numbers with + must include more than 11 digits.');
+          return;
+        }
+      } else if (onlyDigits.length !== 11) {
+        setError('Phone number must be 11 digits or include a + with more than 11 digits.');
+        return;
+      }
+    }
     if (!teacherForm.password || teacherForm.password.length < 6) {
       setError('Password must be at least 6 characters.');
       return;
@@ -801,7 +1105,7 @@ function App() {
       setError('Passwords do not match.');
       return;
     }
-    const normalizedEmail = teacherForm.email.trim().toLowerCase();
+  const normalizedEmail = emailValue.toLowerCase();
     const existingInstructor = records.teachers.find(
       (teacher) => teacher.email?.toLowerCase() === normalizedEmail
     );
@@ -1020,50 +1324,6 @@ function App() {
         return true;
       };
 
-      const resolveDeleteEmail = async () => {
-        if (!teacherToRemove?.email) {
-          setError('Unable to remove teacher. Missing instructor email.');
-          return null;
-        }
-        const normalizedEmail = teacherToRemove.email.trim().toLowerCase();
-        let matchResponse = await supabase
-          .from('teachers')
-          .select('email')
-          .ilike('email', normalizedEmail)
-          .limit(1);
-        if (matchResponse.error) {
-          setError(
-            `Unable to remove teacher (${normalizedEmail}). ${matchResponse.error.message}`
-          );
-          return null;
-        }
-        if (!matchResponse.data || matchResponse.data.length === 0) {
-          matchResponse = await supabase
-            .from('teachers')
-            .select('email')
-            .ilike('email', `${normalizedEmail}%`)
-            .limit(1);
-        }
-        const matchEmail = matchResponse.data?.[0]?.email;
-        if (!matchEmail) {
-          const { data: emailList } = await supabase
-            .from('teachers')
-            .select('email')
-            .limit(5);
-          const sampleEmails = (emailList || [])
-            .map((item) => item.email)
-            .filter(Boolean)
-            .join(', ');
-          setError(
-            `Unable to remove teacher (${normalizedEmail}). No database record matched that email.${
-              sampleEmails ? ` Sample emails: ${sampleEmails}` : ''
-            }`
-          );
-          return null;
-        }
-        return matchEmail;
-      };
-
       const clearedChildren = await clearChildAssignments();
       if (!clearedChildren) {
         return;
@@ -1072,28 +1332,38 @@ function App() {
       if (!removedPhoto) {
         return;
       }
-      const matchEmail = await resolveDeleteEmail();
-      if (!matchEmail) {
-        return;
-      }
       const deleteResponse = await supabase
         .from('teachers')
         .delete()
-        .eq('email', matchEmail)
-        .select('email');
+        .eq('id', teacherId)
+        .select('id, email');
       if (deleteResponse.error) {
-        setError(
-          `Unable to remove teacher (${matchEmail}). ${deleteResponse.error.message}`
-        );
+        setError(`Unable to remove teacher. ${deleteResponse.error.message}`);
         return;
       }
-      if ((deleteResponse.data || []).length === 0) {
-        setError(
-          `Unable to remove teacher (${matchEmail}). No database record matched that email.`
-        );
-        return;
+      if ((deleteResponse.data || []).length === 0 && teacherToRemove?.email) {
+        const normalizedEmail = teacherToRemove.email.trim().toLowerCase();
+        const emailDelete = await supabase
+          .from('teachers')
+          .delete()
+          .ilike('email', normalizedEmail)
+          .select('id, email');
+        if (emailDelete.error) {
+          setError(
+            `Unable to remove teacher (${normalizedEmail}). ${emailDelete.error.message}`
+          );
+          return;
+        }
+        if ((emailDelete.data || []).length === 0) {
+          setStatusWithActor(
+            'Instructor removed locally. No matching database record was found.'
+          );
+        } else {
+          setStatusWithActor('Instructor removed from data base.');
+        }
+      } else {
+        setStatusWithActor('Instructor removed from data base.');
       }
-      setStatusWithActor('Instructor removed from Supabase.');
     }
     setRecords((prev) => ({
       ...prev,
@@ -1156,14 +1426,81 @@ function App() {
     [records.teachers]
   );
 
+  const filteredVerifiedTeachers = React.useMemo(() => {
+    if (!instructorSearch.trim()) {
+      return verifiedTeachers;
+    }
+    const query = instructorSearch.trim().toLowerCase();
+    return verifiedTeachers.filter((teacher) =>
+      [teacher.name, teacher.email, teacher.phone, teacher.role]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(query))
+    );
+  }, [verifiedTeachers, instructorSearch]);
+
+  const filteredPendingTeachers = React.useMemo(() => {
+    if (!instructorSearch.trim()) {
+      return pendingTeachers;
+    }
+    const query = instructorSearch.trim().toLowerCase();
+    return pendingTeachers.filter((teacher) =>
+      [teacher.name, teacher.email, teacher.phone, teacher.role]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(query))
+    );
+  }, [pendingTeachers, instructorSearch]);
+
   const isLeadInstructor = currentInstructor?.role?.toLowerCase().includes('lead');
 
   const approvedAvailability = React.useMemo(
     () => availabilityEntries.filter((entry) => entry.status === 'approved'),
     [availabilityEntries]
   );
+  const approvedAvailabilityCalendar = React.useMemo(() => {
+    const grouped = new Map();
+    approvedAvailability.forEach((entry) => {
+      const dateKey = entry.date || 'unscheduled';
+      if (!grouped.has(dateKey)) {
+        grouped.set(dateKey, []);
+      }
+      grouped.get(dateKey).push(entry);
+    });
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => {
+        if (a === 'unscheduled') return 1;
+        if (b === 'unscheduled') return -1;
+        return new Date(a).getTime() - new Date(b).getTime();
+      })
+      .map(([dateKey, entries]) => {
+        const dateObject =
+          dateKey && dateKey !== 'unscheduled' ? new Date(`${dateKey}T00:00:00`) : null;
+        const label =
+          dateObject && !Number.isNaN(dateObject.getTime())
+            ? dateObject.toLocaleDateString(undefined, {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+              })
+            : 'Unscheduled';
+        const sortedEntries = [...entries].sort((first, second) => {
+          const timeCompare = (first.startTime || '').localeCompare(second.startTime || '');
+          if (timeCompare !== 0) {
+            return timeCompare;
+          }
+          return (first.instructorName || '').localeCompare(second.instructorName || '');
+        });
+        return {
+          dateKey,
+          label,
+          entries: sortedEntries,
+        };
+      });
+  }, [approvedAvailability]);
   const pendingAvailability = React.useMemo(
-    () => availabilityEntries.filter((entry) => entry.status === 'pending'),
+    () =>
+      availabilityEntries.filter((entry) =>
+        ['pending', 'pending_delete'].includes(entry.status)
+      ),
     [availabilityEntries]
   );
   const myAvailability = React.useMemo(
@@ -1171,6 +1508,18 @@ function App() {
       availabilityEntries.filter((entry) => entry.instructorId === currentInstructor?.id),
     [availabilityEntries, currentInstructor]
   );
+
+  const resetAvailabilityForm = React.useCallback(() => {
+    setAvailabilityForm({
+      date: '',
+      startTime: '',
+      endTime: '',
+      notes: '',
+      changeReason: '',
+    });
+    setAvailabilityEditId(null);
+    setAvailabilityEditOriginalDate('');
+  }, []);
 
   const handleAvailabilitySubmit = async (event) => {
     event.preventDefault();
@@ -1182,61 +1531,324 @@ function App() {
       setError('Please provide date, start time, and end time for availability.');
       return;
     }
+    if (availabilityEditId && availabilityEditOriginalDate) {
+      if (availabilityForm.date !== availabilityEditOriginalDate) {
+        setError('You can only edit the time for the same day.');
+        return;
+      }
+    }
+    if (availabilityEditId && !availabilityForm.changeReason.trim()) {
+      setError('Please provide a reason for updating this availability.');
+      return;
+    }
+    if (
+      !isSundayDate(availabilityForm.date) &&
+      !allowedAvailabilityDates.includes(availabilityForm.date)
+    ) {
+      setError('Availability is required every Sunday. Other days must be enabled by the lead instructor.');
+      return;
+    }
     setIsSubmittingAvailability(true);
     setError('');
     setSupabaseStatus('');
+    const isEditing = Boolean(availabilityEditId);
     const newEntry = {
-      id: createId(),
+      id: availabilityEditId || createId(),
       instructorId: currentInstructor.id,
       instructorName: currentInstructor.name,
       date: availabilityForm.date,
       startTime: availabilityForm.startTime,
       endTime: availabilityForm.endTime,
       notes: availabilityForm.notes,
+      changeReason: availabilityForm.changeReason.trim(),
       status: 'pending',
       createdAt: new Date().toISOString(),
     };
     try {
       if (isSupabaseEnabled) {
-        const { data, error: insertError } = await supabase
-          .from('availability')
-          .insert([mapAvailabilityToDb(newEntry)])
-          .select('*')
-          .maybeSingle();
-        if (insertError) {
-          setError(`Unable to submit availability. ${insertError.message}`);
-          return;
-        }
-        if (data) {
-          setAvailabilityEntries((prev) => [mapAvailabilityFromDb(data), ...prev]);
+        if (isEditing) {
+          const { data, error: updateError } = await supabase
+            .from('availability')
+            .update({
+              date: newEntry.date,
+              start_time: newEntry.startTime,
+              end_time: newEntry.endTime,
+              notes: newEntry.notes || null,
+              change_reason: newEntry.changeReason || null,
+              status: 'pending',
+              approved_by: null,
+              approved_at: null,
+            })
+            .eq('id', newEntry.id)
+            .select('*')
+            .maybeSingle();
+          if (updateError) {
+            setError(`Unable to update availability. ${updateError.message}`);
+            return;
+          }
+          if (data) {
+            setAvailabilityEntries((prev) =>
+              prev.map((entry) =>
+                entry.id === newEntry.id ? mapAvailabilityFromDb(data) : entry
+              )
+            );
+          }
+        } else {
+          const { data, error: insertError } = await supabase
+            .from('availability')
+            .insert([mapAvailabilityToDb(newEntry)])
+            .select('*')
+            .maybeSingle();
+          if (insertError) {
+            setError(`Unable to submit availability. ${insertError.message}`);
+            return;
+          }
+          if (data) {
+            setAvailabilityEntries((prev) => [mapAvailabilityFromDb(data), ...prev]);
+          }
         }
       } else {
-        setAvailabilityEntries((prev) => [newEntry, ...prev]);
+        if (isEditing) {
+          setAvailabilityEntries((prev) =>
+            prev.map((entry) =>
+              entry.id === newEntry.id
+                ? {
+                  ...entry,
+                  date: newEntry.date,
+                  startTime: newEntry.startTime,
+                  endTime: newEntry.endTime,
+                  notes: newEntry.notes,
+                  changeReason: newEntry.changeReason,
+                  status: 'pending',
+                  approvedBy: '',
+                  approvedAt: '',
+                }
+                : entry
+            )
+          );
+        } else {
+          setAvailabilityEntries((prev) => [newEntry, ...prev]);
+        }
       }
-      setAvailabilityForm({ date: '', startTime: '', endTime: '', notes: '' });
-      setSupabaseStatus('Availability submitted for review.');
+      resetAvailabilityForm();
+      setSupabaseStatus(
+        isEditing ? 'Availability update submitted for review.' : 'Availability submitted for review.'
+      );
     } finally {
       setIsSubmittingAvailability(false);
     }
   };
 
-  const handleAvailabilityStatus = async (entryId, status) => {
+  const handleAvailabilityEdit = (entry) => {
+    setAvailabilityForm({
+      date: entry.date || '',
+      startTime: entry.startTime || '',
+      endTime: entry.endTime || '',
+      notes: entry.notes || '',
+      changeReason: entry.changeReason || '',
+    });
+    setAvailabilityEditId(entry.id);
+    setAvailabilityEditOriginalDate(entry.date || '');
+    setError('');
+    setSupabaseStatus('');
+  };
+
+  const handleAvailabilityRequestEdit = async (entry, reasonOverride) => {
+    setError('');
+    setSupabaseStatus('');
+    const requestReason = reasonOverride || updateRequest.reason;
+    if (!requestReason || !requestReason.trim()) {
+      setError('Please provide a reason for updating.');
+      return;
+    }
+    if (isSupabaseEnabled) {
+      const { data, error: updateError } = await supabase
+        .from('availability')
+        .update({
+          status: 'pending',
+          approved_by: null,
+          approved_at: null,
+          change_reason: requestReason.trim(),
+        })
+        .eq('id', entry.id)
+        .select('*')
+        .maybeSingle();
+      if (updateError) {
+        setError(`Unable to request edit. ${updateError.message}`);
+        return;
+      }
+      if (data) {
+        const updated = mapAvailabilityFromDb(data);
+        setAvailabilityEntries((prev) =>
+          prev.map((item) => (item.id === entry.id ? updated : item))
+        );
+        handleAvailabilityEdit(updated);
+      }
+    } else {
+      const updated = {
+        ...entry,
+        status: 'pending',
+        approvedBy: '',
+        approvedAt: '',
+        changeReason: requestReason.trim(),
+      };
+      setAvailabilityEntries((prev) =>
+        prev.map((item) => (item.id === entry.id ? updated : item))
+      );
+      handleAvailabilityEdit(updated);
+    }
+    setUpdateRequest({ entry: null, reason: '' });
+    setSupabaseStatus('Edit request sent for approval.');
+  };
+
+  const handleAvailabilityReset = async (entry) => {
+    setError('');
+    setSupabaseStatus('');
+    if (isSupabaseEnabled) {
+      const { data, error: updateError } = await supabase
+        .from('availability')
+        .update({ status: 'pending', approved_by: null, approved_at: null })
+        .eq('id', entry.id)
+        .select('*')
+        .maybeSingle();
+      if (updateError) {
+        setError(`Unable to reset availability. ${updateError.message}`);
+        return;
+      }
+      if (data) {
+        setAvailabilityEntries((prev) =>
+          prev.map((item) => (item.id === entry.id ? mapAvailabilityFromDb(data) : item))
+        );
+      }
+    } else {
+      setAvailabilityEntries((prev) =>
+        prev.map((item) =>
+          item.id === entry.id
+            ? { ...item, status: 'pending', approvedBy: '', approvedAt: '' }
+            : item
+        )
+      );
+    }
+    setSupabaseStatus('Availability reset for approval.');
+  };
+
+  const handleAvailabilityDelete = async (entry, reasonOverride) => {
+    setError('');
+    setSupabaseStatus('');
+    if (entry.status !== 'approved' && isLeadInstructor) {
+      if (isSupabaseEnabled) {
+        const { data, error: deleteError } = await supabase
+          .from('availability')
+          .delete()
+          .eq('id', entry.id)
+          .select('id');
+        if (deleteError) {
+          setError(`Unable to delete availability. ${deleteError.message}`);
+          return;
+        }
+        if (!data || data.length === 0) {
+          setError(
+            'Unable to delete availability. Check delete policy on public.availability.'
+          );
+          return;
+        }
+      }
+      setAvailabilityEntries((prev) => prev.filter((item) => item.id !== entry.id));
+      setSupabaseStatus('Availability deleted.');
+      return;
+    }
+
+    const deleteReason = reasonOverride || deleteRequest.reason;
+    if (!deleteReason || !deleteReason.trim()) {
+      setError('Delete reason is required.');
+      return;
+    }
+
+    if (isSupabaseEnabled) {
+      const { data, error: updateError } = await supabase
+        .from('availability')
+        .update({
+          status: 'pending_delete',
+          approved_by: null,
+          approved_at: null,
+          change_reason: deleteReason.trim(),
+        })
+        .eq('id', entry.id)
+        .select('*')
+        .maybeSingle();
+      if (updateError) {
+        setError(`Unable to request delete. ${updateError.message}`);
+        return;
+      }
+      if (data) {
+        setAvailabilityEntries((prev) =>
+          prev.map((item) => (item.id === entry.id ? mapAvailabilityFromDb(data) : item))
+        );
+      }
+    } else {
+      setAvailabilityEntries((prev) =>
+        prev.map((item) =>
+          item.id === entry.id
+            ? { ...item, status: 'pending_delete', approvedBy: '', approvedAt: '' }
+            : item
+        )
+      );
+    }
+    setAvailabilityEntries((prev) =>
+      prev.map((item) =>
+        item.id === entry.id ? { ...item, changeReason: deleteReason.trim() } : item
+      )
+    );
+    setDeleteRequest({ entry: null, reason: '' });
+    setSupabaseStatus('Delete request sent for approval.');
+  };
+
+  const handleAvailabilityStatus = async (entry, action, reasonOverride) => {
     if (!isLeadInstructor) {
       setError('Only the lead instructor can approve availability.');
       return;
     }
     setError('');
     setSupabaseStatus('');
-    const nextStatus = status === 'approved' ? 'approved' : 'declined';
+    const approvalReason = reasonOverride || approvalReasons[entry.id] || '';
+    if (action === 'declined' && !approvalReason.trim()) {
+      setError('Please provide a reason for declining.');
+      return;
+    }
+    const normalizedApprovalReason = action === 'declined' ? approvalReason.trim() : '';
+    const isDeleteRequest = entry.status === 'pending_delete';
+    const nextStatus = action === 'approved' ? 'approved' : 'declined';
     if (isSupabaseEnabled) {
+      if (isDeleteRequest && action === 'approved') {
+        const { data, error: deleteError } = await supabase
+          .from('availability')
+          .delete()
+          .eq('id', entry.id)
+          .select('id');
+        if (deleteError) {
+          setError(`Unable to delete availability. ${deleteError.message}`);
+          return;
+        }
+        if (!data || data.length === 0) {
+          setError(
+            'Unable to delete availability. Check delete policy on public.availability.'
+          );
+          return;
+        }
+        setAvailabilityEntries((prev) => prev.filter((item) => item.id !== entry.id));
+        setSupabaseStatus('Availability deleted.');
+        return;
+      }
+
       const { data, error: updateError } = await supabase
         .from('availability')
         .update({
-          status: nextStatus,
+          status: isDeleteRequest && action !== 'approved' ? 'approved' : nextStatus,
           approved_by: currentInstructor?.id || null,
           approved_at: new Date().toISOString(),
+          approval_reason: normalizedApprovalReason || null,
         })
-        .eq('id', entryId)
+        .eq('id', entry.id)
         .select('*')
         .maybeSingle();
       if (updateError) {
@@ -1245,26 +1857,41 @@ function App() {
       }
       if (data) {
         setAvailabilityEntries((prev) =>
-          prev.map((entry) =>
-            entry.id === entryId ? mapAvailabilityFromDb(data) : entry
-          )
+          prev.map((item) => (item.id === entry.id ? mapAvailabilityFromDb(data) : item))
         );
       }
     } else {
+      if (isDeleteRequest && action === 'approved') {
+        setAvailabilityEntries((prev) => prev.filter((item) => item.id !== entry.id));
+        setSupabaseStatus('Availability deleted.');
+        return;
+      }
       setAvailabilityEntries((prev) =>
-        prev.map((entry) =>
-          entry.id === entryId
+        prev.map((item) =>
+          item.id === entry.id
             ? {
-              ...entry,
-              status: nextStatus,
+              ...item,
+              status: isDeleteRequest && action !== 'approved' ? 'approved' : nextStatus,
               approvedBy: currentInstructor?.id || '',
               approvedAt: new Date().toISOString(),
+              approvalReason: normalizedApprovalReason,
             }
-            : entry
+            : item
         )
       );
     }
-    setSupabaseStatus(`Availability ${nextStatus}.`);
+    setApprovalReasons((prev) => {
+      const next = { ...prev };
+      delete next[entry.id];
+      return next;
+    });
+    setSupabaseStatus(
+      isDeleteRequest
+        ? action === 'approved'
+          ? 'Availability deleted.'
+          : 'Delete request declined.'
+        : `Availability ${nextStatus}.`
+    );
   };
 
   const filteredChildren = React.useMemo(() => {
@@ -1653,20 +2280,97 @@ function App() {
               </p>
             </div>
             <button type="button" className="ghost" onClick={() => setView('home')}>
-              Back to home
+              ← Back
             </button>
+          </div>
+          <div className="availability-rules">
+            <div>
+              <h3>Availability rules</h3>
+              <p className="muted">
+                Availability is required every Sunday for all instructors. Other days must be enabled by the lead instructor.
+              </p>
+            </div>
+            {isLeadInstructor && (
+              <div className="availability-rules__controls">
+                <label>
+                  Allow extra date
+                  <input
+                    type="date"
+                    value={availabilityRuleDate}
+                    onChange={(event) => setAvailabilityRuleDate(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Occasion
+                  <input
+                    type="text"
+                    value={availabilityRuleOccasion}
+                    onChange={(event) => setAvailabilityRuleOccasion(event.target.value)}
+                    placeholder="e.g. Special service"
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handleAddAllowedDate}
+                  disabled={isSavingAvailabilityRules}
+                >
+                  {isSavingAvailabilityRules ? 'Saving…' : 'Add date'}
+                </button>
+              </div>
+            )}
+            {sortedAllowedAvailabilityDates.length === 0 ? (
+              <p className="empty">No extra dates enabled yet.</p>
+            ) : (
+              <div className="availability-rules__list">
+                {sortedAllowedAvailabilityDates.map((dateValue) => (
+                  <div key={dateValue} className="availability-rules__chip">
+                    <span>
+                      {formatAvailabilityDateLabel(dateValue)}
+                      {(() => {
+                        const occasion = allowedAvailabilityDetailsByDate.get(dateValue)?.occasion;
+                        if (occasion) {
+                          return ` — ${occasion}`;
+                        }
+                        if (isSundayDate(dateValue)) {
+                          return ' — Sunday service';
+                        }
+                        return '';
+                      })()}
+                    </span>
+                    {isLeadInstructor && (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => handleRemoveAllowedDate(dateValue)}
+                        disabled={isSavingAvailabilityRules}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <form className="form availability-form" onSubmit={handleAvailabilitySubmit}>
             <div className="form__grid">
               <label>
                 Date
-                <input
-                  type="date"
+                <select
                   name="date"
                   value={availabilityForm.date}
                   onChange={handleAvailabilityFormChange}
+                  disabled={Boolean(availabilityEditId)}
                   required
-                />
+                >
+                  <option value="">Select a day</option>
+                  {selectableAvailabilityOptions.map((option) => (
+                    <option key={option.date} value={option.date}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 Start time
@@ -1697,10 +2401,33 @@ function App() {
                   placeholder="Add any extra details"
                 />
               </label>
+              {availabilityEditId && (
+                <label className="form__full">
+                  Update reason
+                  <textarea
+                    name="changeReason"
+                    value={availabilityForm.changeReason}
+                    onChange={handleAvailabilityFormChange}
+                    placeholder="Why are you updating this availability?"
+                    required
+                  />
+                </label>
+              )}
             </div>
-            <button type="submit" className="primary" disabled={isSubmittingAvailability}>
-              {isSubmittingAvailability ? 'Submitting…' : 'Submit availability'}
-            </button>
+            <div className="panel__actions">
+              <button type="submit" className="primary" disabled={isSubmittingAvailability}>
+                {isSubmittingAvailability
+                  ? 'Submitting…'
+                  : availabilityEditId
+                    ? 'Update availability'
+                    : 'Submit availability'}
+              </button>
+              {availabilityEditId && (
+                <button type="button" className="ghost" onClick={resetAvailabilityForm}>
+                  Cancel edit
+                </button>
+              )}
+            </div>
           </form>
 
           <div className="availability-section">
@@ -1714,15 +2441,130 @@ function App() {
                     <div>
                       <div className="availability-card__title">
                         <strong>{entry.date}</strong>
-                        <span className={`availability-status availability-status--${entry.status}`}>
-                          {entry.status}
+                        <span
+                          className={`availability-status availability-status--${entry.status}`}
+                        >
+                          {formatAvailabilityStatus(entry.status)}
                         </span>
                       </div>
                       <p className="muted">
                         {entry.startTime} - {entry.endTime}
                       </p>
+                      {entry.approvalReason && (
+                        <p className="muted">Disapproval reason: {entry.approvalReason}</p>
+                      )}
+                      {entry.changeReason && (
+                        <p className="muted">Update reason: {entry.changeReason}</p>
+                      )}
                       {entry.notes && <p className="muted">{entry.notes}</p>}
                     </div>
+                    <div className="panel__actions availability-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() =>
+                          entry.status === 'approved' && !isLeadInstructor
+                            ? setUpdateRequest({ entry, reason: entry.changeReason || '' })
+                            : handleAvailabilityEdit(entry)
+                        }
+                        disabled={entry.status === 'pending_delete'}
+                      >
+                        {entry.status === 'approved' && !isLeadInstructor ? 'Request edit' : 'Edit'}
+                      </button>
+                      {entry.status === 'pending' && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => handleAvailabilityReset(entry)}
+                        >
+                          Reset approval
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() =>
+                          entry.status !== 'approved' && isLeadInstructor
+                            ? handleAvailabilityDelete(entry, 'Lead deletion')
+                            : setDeleteRequest({ entry, reason: entry.changeReason || '' })
+                        }
+                      >
+                        {entry.status === 'approved' || !isLeadInstructor
+                          ? 'Request delete'
+                          : 'Delete'}
+                      </button>
+                    </div>
+                    {deleteRequest.entry?.id === entry.id && (
+                      <div className="availability-delete">
+                        <label>
+                          Reason for delete
+                          <textarea
+                            name="deleteReason"
+                            value={deleteRequest.reason}
+                            onChange={(event) =>
+                              setDeleteRequest((prev) => ({
+                                ...prev,
+                                reason: event.target.value,
+                              }))
+                            }
+                            placeholder="Why should this availability be deleted?"
+                            required
+                          />
+                        </label>
+                        <div className="panel__actions">
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => setDeleteRequest({ entry: null, reason: '' })}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="primary"
+                            onClick={() => handleAvailabilityDelete(entry, deleteRequest.reason)}
+                          >
+                            Submit delete request
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {updateRequest.entry?.id === entry.id && (
+                      <div className="availability-update">
+                        <label>
+                          Update reason
+                          <textarea
+                            value={updateRequest.reason}
+                            onChange={(event) =>
+                              setUpdateRequest((prev) => ({
+                                ...prev,
+                                reason: event.target.value,
+                              }))
+                            }
+                            placeholder="Why should this availability be updated?"
+                            required
+                          />
+                        </label>
+                        <div className="panel__actions">
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => setUpdateRequest({ entry: null, reason: '' })}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="primary"
+                            onClick={() =>
+                              handleAvailabilityRequestEdit(entry, updateRequest.reason)
+                            }
+                          >
+                            Submit update request
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1741,28 +2583,83 @@ function App() {
                       <div>
                         <div className="availability-card__title">
                           <strong>{entry.instructorName || 'Instructor'}</strong>
-                          <span className="availability-status availability-status--pending">Pending</span>
+                          <span
+                            className={`availability-status availability-status--${entry.status}`}
+                          >
+                            {formatAvailabilityStatus(entry.status)}
+                          </span>
                         </div>
                         <p className="muted">
                           {entry.date} · {entry.startTime} - {entry.endTime}
                         </p>
+                        {entry.approvalReason && (
+                          <p className="muted">Disapproval reason: {entry.approvalReason}</p>
+                        )}
+                        {entry.changeReason && (
+                          <p className="muted">Update reason: {entry.changeReason}</p>
+                        )}
                         {entry.notes && <p className="muted">{entry.notes}</p>}
                       </div>
+                      <div className="availability-approval">
+                        <label>
+                          Disapproval reason (required to decline)
+                          <textarea
+                            value={approvalReasons[entry.id] || ''}
+                            onChange={(event) =>
+                              setApprovalReasons((prev) => ({
+                                ...prev,
+                                [entry.id]: event.target.value,
+                              }))
+                            }
+                            placeholder="Why are you declining this availability?"
+                            required
+                          />
+                        </label>
+                      </div>
                       <div className="panel__actions">
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => handleAvailabilityStatus(entry.id, 'approved')}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => handleAvailabilityStatus(entry.id, 'declined')}
-                        >
-                          Decline
-                        </button>
+                        {entry.status === 'pending_delete' ? (
+                          <>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() =>
+                                handleAvailabilityStatus(entry, 'approved', approvalReasons[entry.id])
+                              }
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() =>
+                                handleAvailabilityStatus(entry, 'declined', approvalReasons[entry.id])
+                              }
+                            >
+                              Deny
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() =>
+                                handleAvailabilityStatus(entry, 'approved', approvalReasons[entry.id])
+                              }
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() =>
+                                handleAvailabilityStatus(entry, 'declined', approvalReasons[entry.id])
+                              }
+                            >
+                              Decline
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1776,18 +2673,33 @@ function App() {
             {approvedAvailability.length === 0 ? (
               <p className="empty">No approved availability yet.</p>
             ) : (
-              <div className="list">
-                {approvedAvailability.map((entry) => (
-                  <div key={entry.id} className="card availability-card">
-                    <div>
-                      <div className="availability-card__title">
-                        <strong>{entry.instructorName || 'Instructor'}</strong>
-                        <span className="availability-status availability-status--approved">Approved</span>
-                      </div>
-                      <p className="muted">
-                        {entry.date} · {entry.startTime} - {entry.endTime}
-                      </p>
-                      {entry.notes && <p className="muted">{entry.notes}</p>}
+              <div className="availability-calendar">
+                {approvedAvailabilityCalendar.map((day) => (
+                  <div key={day.dateKey} className="availability-day">
+                    <div className="availability-day__header">
+                      <strong>{day.label}</strong>
+                      {day.dateKey !== 'unscheduled' && (
+                        <span className="muted">{day.dateKey}</span>
+                      )}
+                    </div>
+                    <div className="availability-day__slots">
+                      {day.entries.map((entry) => (
+                        <div key={entry.id} className="availability-slot">
+                          <div>
+                            <div className="availability-slot__name">
+                              {entry.instructorName || 'Instructor'}
+                            </div>
+                            <div className="availability-slot__time">
+                              {entry.startTime && entry.endTime
+                                ? `${entry.startTime} - ${entry.endTime}`
+                                : 'Time not set'}
+                            </div>
+                          </div>
+                          {entry.notes && (
+                            <div className="availability-slot__notes">{entry.notes}</div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -1869,14 +2781,18 @@ function App() {
               <p className="empty">No children assigned to this instructor yet.</p>
             ) : (
               assignedChildren.map((child) => (
-                <article key={child.id} className="card">
+                <article
+                  key={child.id}
+                  className="card"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openChild(child)}
+                  onKeyDown={(event) => handleCardKeyDown(event, () => openChild(child))}
+                >
                   <div>
                     <h4>{child.name}</h4>
                     <p className="muted">Class: {child.classCategory || 'Unassigned'}</p>
                   </div>
-                  <button type="button" className="ghost" onClick={() => openChild(child)}>
-                    View child
-                  </button>
                 </article>
               ))
             )}
@@ -2043,17 +2959,31 @@ function App() {
             <div className="panel__heading">
               <h2>Instructors</h2>
               <div className="panel__actions">
+                <input
+                  type="search"
+                  value={instructorSearch}
+                  onChange={(event) => setInstructorSearch(event.target.value)}
+                  placeholder="Search instructors"
+                  aria-label="Search instructors"
+                />
                 <button type="button" className="ghost" onClick={handleBackToHome} aria-label="Back">
                   ←
                 </button>
               </div>
             </div>
             <div className="list">
-              {verifiedTeachers.length === 0 ? (
+              {filteredVerifiedTeachers.length === 0 ? (
                 <p className="empty">No verified instructors yet. Add your first instructor above.</p>
               ) : (
-                verifiedTeachers.map((teacher) => (
-                  <article key={teacher.id} className="card">
+                filteredVerifiedTeachers.map((teacher) => (
+                  <article
+                    key={teacher.id}
+                    className="card"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openInstructor(teacher)}
+                    onKeyDown={(event) => handleCardKeyDown(event, () => openInstructor(teacher))}
+                  >
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         {renderTeacherAvatar(teacher)}
@@ -2068,19 +2998,15 @@ function App() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => openInstructor(teacher)}
-                      >
-                        View details
-                      </button>
                       {isLeadInstructor &&
                         !teacher.role?.toLowerCase().includes('lead') && (
                           <button
                             type="button"
                             className="ghost"
-                            onClick={() => handleDeleteTeacher(teacher.id)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleDeleteTeacher(teacher.id);
+                            }}
                           >
                             Remove
                           </button>
@@ -2092,36 +3018,42 @@ function App() {
             </div>
             <div className="panel__sublist">
               <h3>Pending Instructor Verifications</h3>
-              {pendingTeachers.length === 0 ? (
+              {filteredPendingTeachers.length === 0 ? (
                 <p className="empty">No pending verifications.</p>
               ) : (
-                pendingTeachers.map((teacher) => (
-                  <article key={teacher.id} className="card">
+                filteredPendingTeachers.map((teacher) => (
+                  <article
+                    key={teacher.id}
+                    className="card"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openInstructor(teacher)}
+                    onKeyDown={(event) => handleCardKeyDown(event, () => openInstructor(teacher))}
+                  >
                     <div>
                       <h4>{teacher.name}</h4>
                       <p className="muted">{teacher.role}</p>
                       <span>{teacher.email}</span>
                       <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => openInstructor(teacher)}
-                        >
-                          View details
-                        </button>
                         {isLeadInstructor && (
                           <>
                             <button
                               type="button"
                               className="primary"
-                              onClick={() => handleVerifyTeacher(teacher.id)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleVerifyTeacher(teacher.id);
+                              }}
                             >
                               Verify
                             </button>
                             <button
                               type="button"
                               className="ghost"
-                              onClick={() => handleDeleteTeacher(teacher.id)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleDeleteTeacher(teacher.id);
+                              }}
                             >
                               Deny
                             </button>
@@ -2176,6 +3108,10 @@ function App() {
                       <article
                         key={child.id}
                         className={`card${child.signedIn ? ' card--signedin' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => openChild(child)}
+                        onKeyDown={(event) => handleCardKeyDown(event, () => openChild(child))}
                       >
                         <div>
                           <div className="card__title">
@@ -2191,13 +3127,6 @@ function App() {
                             <span>Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}</span>
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => openChild(child)}
-                        >
-                          View details
-                        </button>
                       </article>
                     ))}
                   </div>
