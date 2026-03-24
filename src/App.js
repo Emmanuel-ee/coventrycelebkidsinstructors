@@ -17,7 +17,6 @@ import RegisterView from './components/views/RegisterView';
 import useAvailabilityActions from './hooks/useAvailabilityActions';
 import useAvailabilityCalendar from './hooks/useAvailabilityCalendar';
 import useChildrenData from './hooks/useChildrenData';
-import useChildCheckin from './hooks/useChildCheckin';
 import useInstructorData from './hooks/useInstructorData';
 import useInstructorRegistration from './hooks/useInstructorRegistration';
 import useInstructorVerification from './hooks/useInstructorVerification';
@@ -28,6 +27,7 @@ const AVAILABILITY_RULES_KEY = 'celebkids-availability-rules-v1';
 const EMPTY_RECORDS = { teachers: [], children: [] };
 const INSTRUCTOR_PHOTOS_BUCKET =
   process.env.REACT_APP_INSTRUCTOR_PHOTOS_BUCKET || 'instructor-photos';
+const REFRESH_VIEWS = new Set(['children', 'instructors', 'instructor', 'availability']);
 
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -242,7 +242,6 @@ const formatAvailabilityStatus = (status) => {
 };
 
 function App() {
-  const attendanceActive = true;
   const [pendingVerification, setPendingVerification] = React.useState(false);
   const [records, setRecords] = React.useState(() =>
     isSupabaseEnabled ? EMPTY_RECORDS : loadLocalRecords()
@@ -254,7 +253,6 @@ function App() {
   const [currentInstructor, setCurrentInstructor] = React.useState(null);
   const [selectedChild, setSelectedChild] = React.useState(null);
   const [selectedTeacher, setSelectedTeacher] = React.useState(null);
-  const [isUpdatingChildStatus, setIsUpdatingChildStatus] = React.useState(false);
   const [teacherForm, setTeacherForm] = React.useState({
     name: '',
     email: '',
@@ -771,57 +769,62 @@ function App() {
 
   const fetchRecords = React.useCallback(
     async ({ setViewOnAuth = false, showLoading = true } = {}) => {
-    if (!isSupabaseEnabled) {
-      return;
-    }
-
-    if (showLoading) {
-      setIsLoading(true);
-      setSupabaseStatus('');
-    } else {
-      setIsRefreshing(true);
-    }
-    setError('');
-    const [teachersResponse, childrenResponse] = await Promise.all([
-      supabasePublic.from('teachers').select('*').order('created_at', { ascending: false }),
-      supabasePublic.from('children').select('*').order('created_at', { ascending: false }),
-    ]);
-
-    if (teachersResponse.error || childrenResponse.error) {
-      const message = teachersResponse.error?.message || childrenResponse.error?.message;
-      setError(`Unable to load records from Supabase. ${message || 'Check your connection.'}`);
-      if (showLoading) {
-        setIsLoading(false);
-      } else {
-        setIsRefreshing(false);
+      if (!isSupabaseEnabled) {
+        return;
       }
-      return;
-    }
 
-    const mappedTeachers = (teachersResponse.data || []).map(mapTeacherFromDb);
-    const mappedChildren = (childrenResponse.data || []).map(mapChildFromDb);
-    setRecords({
-      teachers: mappedTeachers,
-      children: mappedChildren,
-    });
-    const storedId = localStorage.getItem(SIGNED_IN_KEY);
-    if (storedId) {
-      const matched = mappedTeachers.find((teacher) => teacher.id === storedId);
-      if (matched) {
-        setCurrentInstructor(matched);
-        if (setViewOnAuth) {
-          setView('home');
+      const finalizeLoading = () => {
+        if (showLoading) {
+          setIsLoading(false);
+        } else {
+          setIsRefreshing(false);
         }
+      };
+
+      if (showLoading) {
+        setIsLoading(true);
+        setSupabaseStatus('');
       } else {
-        localStorage.removeItem(SIGNED_IN_KEY);
+        setIsRefreshing(true);
       }
-    }
-    if (showLoading) {
-      setIsLoading(false);
-    } else {
-      setIsRefreshing(false);
-    }
-  }, []);
+      setError('');
+
+      const [teachersResponse, childrenResponse] = await Promise.all([
+        supabasePublic.from('teachers').select('*').order('created_at', { ascending: false }),
+        supabasePublic.from('children').select('*').order('created_at', { ascending: false }),
+      ]);
+
+      if (teachersResponse.error || childrenResponse.error) {
+        const message = teachersResponse.error?.message || childrenResponse.error?.message;
+        setError(
+          `Unable to load records from Supabase. ${message || 'Check your connection.'}`
+        );
+        finalizeLoading();
+        return;
+      }
+
+      const mappedTeachers = (teachersResponse.data || []).map(mapTeacherFromDb);
+      const mappedChildren = (childrenResponse.data || []).map(mapChildFromDb);
+      setRecords({
+        teachers: mappedTeachers,
+        children: mappedChildren,
+      });
+      const storedId = localStorage.getItem(SIGNED_IN_KEY);
+      if (storedId) {
+        const matched = mappedTeachers.find((teacher) => teacher.id === storedId);
+        if (matched) {
+          setCurrentInstructor(matched);
+          if (setViewOnAuth) {
+            setView('home');
+          }
+        } else {
+          localStorage.removeItem(SIGNED_IN_KEY);
+        }
+      }
+      finalizeLoading();
+    },
+    []
+  );
 
   React.useEffect(() => {
     if (!isSupabaseEnabled) {
@@ -835,7 +838,7 @@ function App() {
   }, [fetchRecords]);
 
   React.useEffect(() => {
-    if (['children', 'instructors', 'instructor', 'availability'].includes(view)) {
+    if (REFRESH_VIEWS.has(view)) {
       fetchRecords({ showLoading: false });
     }
   }, [fetchRecords, view]);
@@ -1145,20 +1148,6 @@ function App() {
     setSelectedChild(null);
     setView('children');
   };
-  const handleChildCheckin = useChildCheckin({
-    attendanceActive,
-    selectedChild,
-    currentInstructor,
-    isSupabaseEnabled,
-    supabase,
-    createId,
-    setError,
-    setSupabaseStatus,
-    setIsUpdatingChildStatus,
-    setRecords,
-    setSelectedChild,
-    setStatusWithActor,
-  });
 
   const handleAddTeacher = useInstructorRegistration({
     teacherForm,
@@ -1851,10 +1840,7 @@ function App() {
           selectedChild={selectedChild}
           teacherLookup={teacherLookup}
           qrCodeValue={qrCodeValue}
-          isUpdatingChildStatus={isUpdatingChildStatus}
           onBack={handleBackToChildren}
-          onSignIn={() => handleChildCheckin('sign_in')}
-          onSignOut={() => handleChildCheckin('sign_out')}
         />
       ) : (
         childrenView

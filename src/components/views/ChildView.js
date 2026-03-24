@@ -5,10 +5,7 @@ const ChildView = ({
   selectedChild,
   teacherLookup,
   qrCodeValue,
-  isUpdatingChildStatus,
   onBack,
-  onSignIn,
-  onSignOut,
 }) => (
   <section className="panel">
     <div className="panel__heading">
@@ -17,23 +14,47 @@ const ChildView = ({
         <button type="button" className="ghost" onClick={onBack}>
           Back to children
         </button>
-        <button type="button" className="ghost" disabled={isUpdatingChildStatus} onClick={onSignIn}>
-          Sign in
-        </button>
-        <button type="button" className="ghost" disabled={isUpdatingChildStatus} onClick={onSignOut}>
-          Sign out
-        </button>
       </div>
     </div>
-    <div className="card card--stack">
-      <div>
-        <div className="meta">
-          <span>Class: {selectedChild.classCategory || 'Unassigned'}</span>
-          <span>Guardian: {selectedChild.guardianName || 'No guardian listed'}</span>
-          <span>Contact: {selectedChild.guardianContact || 'No contact listed'}</span>
-          <span>Assigned: {teacherLookup[selectedChild.teacherId] || 'Unassigned'}</span>
+    <div className="card card--stack detail-card">
+      <div className="detail-card__header">
+        <div>
+          <h3>Child details</h3>
+          <p className="muted">Review guardian and class information.</p>
         </div>
-        <p className="muted">Last status: {selectedChild.lastStatus || 'No activity yet'}</p>
+        <span className={`badge ${selectedChild.signedIn ? 'badge--signedin' : 'badge--pending'}`}>
+          {selectedChild.signedIn ? 'Signed in' : 'Signed out'}
+        </span>
+      </div>
+      <div className="detail-grid">
+        <div className="detail-item">
+          <span className="detail-label">Class</span>
+          <span>{selectedChild.classCategory || 'Unassigned'}</span>
+        </div>
+        <div className="detail-item">
+          <span className="detail-label">Guardian</span>
+          <span>{selectedChild.guardianName || 'No guardian listed'}</span>
+        </div>
+        <div className="detail-item">
+          <span className="detail-label">Contact</span>
+          <span>{selectedChild.guardianContact || 'No contact listed'}</span>
+        </div>
+        <div className="detail-item">
+          <span className="detail-label">Assigned</span>
+          <span>{teacherLookup[selectedChild.teacherId] || 'Unassigned'}</span>
+        </div>
+        <div className="detail-item">
+          <span className="detail-label">Last status</span>
+          <span>{selectedChild.lastStatus || 'No activity yet'}</span>
+        </div>
+        <div className="detail-item">
+          <span className="detail-label">Last check-in</span>
+          <span>
+            {selectedChild.lastActionAt
+              ? new Date(selectedChild.lastActionAt).toLocaleString()
+              : 'Not recorded'}
+          </span>
+        </div>
       </div>
       <div className="qr-code">
         <QRCodeCanvas value={qrCodeValue} size={180} includeMargin />

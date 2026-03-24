@@ -572,6 +572,55 @@ textarea {
   color: #15803d;
 }
 
+.badge--verified {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.badge--pending {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.detail-card {
+  gap: 20px;
+}
+
+.detail-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.detail-card__identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 20px;
+  width: 100%;
+}
+
+.detail-item {
+  display: grid;
+  gap: 6px;
+  font-size: 0.95rem;
+}
+
+.detail-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #7d839c;
+}
+
 .qr-code {
   display: grid;
   gap: 12px;

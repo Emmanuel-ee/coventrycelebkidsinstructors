@@ -30,25 +30,40 @@ const InstructorDetailView = ({
         )}
       </div>
     </div>
-    <div className="card card--stack">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        {renderTeacherAvatar(selectedTeacher, 56)}
-        <div>
-          <h3>{selectedTeacher.role}</h3>
-          <p className="muted">
-            {selectedTeacher.verified ? 'Verified instructor' : 'Pending verification'}
-          </p>
+    <div className="card card--stack detail-card">
+      <div className="detail-card__header">
+        <div className="detail-card__identity">
+          {renderTeacherAvatar(selectedTeacher, 64)}
+          <div>
+            <h3>{selectedTeacher.role}</h3>
+            <p className="muted">Instructor profile</p>
+          </div>
         </div>
-      </div>
-      <div className="meta">
-        <span>Email: {selectedTeacher.email || 'No email provided'}</span>
-        <span>Phone: {selectedTeacher.phone || 'No phone provided'}</span>
-        <span>
-          Joined:{' '}
-          {selectedTeacher.createdAt
-            ? new Date(selectedTeacher.createdAt).toLocaleDateString()
-            : 'Unknown'}
+        <span
+          className={`badge ${
+            selectedTeacher.verified ? 'badge--verified' : 'badge--pending'
+          }`}
+        >
+          {selectedTeacher.verified ? 'Verified' : 'Pending'}
         </span>
+      </div>
+      <div className="detail-grid">
+        <div className="detail-item">
+          <span className="detail-label">Email</span>
+          <span>{selectedTeacher.email || 'No email provided'}</span>
+        </div>
+        <div className="detail-item">
+          <span className="detail-label">Phone</span>
+          <span>{selectedTeacher.phone || 'No phone provided'}</span>
+        </div>
+        <div className="detail-item">
+          <span className="detail-label">Joined</span>
+          <span>
+            {selectedTeacher.createdAt
+              ? new Date(selectedTeacher.createdAt).toLocaleDateString()
+              : 'Unknown'}
+          </span>
+        </div>
       </div>
     </div>
     <div className="panel__sublist">
