@@ -1,8 +1,26 @@
 import React from 'react';
 import bcrypt from 'bcryptjs';
-import { QRCodeCanvas } from 'qrcode.react';
 import './App.css';
 import { isSupabaseEnabled, supabase, supabasePublic } from './lib/supabaseClient';
+import AppHeader from './components/AppHeader';
+import AppStatus from './components/AppStatus';
+import DeleteInstructorModal from './components/DeleteInstructorModal';
+import AvailabilityView from './components/views/AvailabilityView';
+import ChildView from './components/views/ChildView';
+import ChildrenView from './components/views/ChildrenView';
+import HomeView from './components/views/HomeView';
+import InstructorDetailView from './components/views/InstructorDetailView';
+import InstructorsView from './components/views/InstructorsView';
+import LoginView from './components/views/LoginView';
+import ProfileView from './components/views/ProfileView';
+import RegisterView from './components/views/RegisterView';
+import useAvailabilityActions from './hooks/useAvailabilityActions';
+import useAvailabilityCalendar from './hooks/useAvailabilityCalendar';
+import useChildrenData from './hooks/useChildrenData';
+import useChildCheckin from './hooks/useChildCheckin';
+import useInstructorData from './hooks/useInstructorData';
+import useInstructorRegistration from './hooks/useInstructorRegistration';
+import useInstructorVerification from './hooks/useInstructorVerification';
 
 const STORAGE_KEY = 'celebkids-records-v1';
 const SIGNED_IN_KEY = 'celebkids-instructor-id';
@@ -62,6 +80,8 @@ const normalizeAvailabilityDetails = (value) => {
     .filter((item) => item && item.date);
 };
 
+const isTruthyFlag = (value) => value === true || value === 1 || value === 'true';
+
 const mapTeacherFromDb = (teacher) => ({
   id: teacher.id,
   name: teacher.name || '',
@@ -69,7 +89,7 @@ const mapTeacherFromDb = (teacher) => ({
   phone: teacher.phone || '',
   role: teacher.role || 'Instructor',
   createdAt: teacher.created_at || teacher.createdAt || new Date().toISOString(),
-  verified: teacher.verified === true || teacher.verified === 1 || teacher.verified === 'true',
+  verified: isTruthyFlag(teacher.verified),
   passwordHash: teacher.password_hash || teacher.password || '',
   photoUrl: teacher.photo_url || teacher.photoUrl || '',
 });
@@ -299,6 +319,7 @@ function App() {
   const [isSavingAvailabilityRules, setIsSavingAvailabilityRules] = React.useState(false);
   const [availabilityEditId, setAvailabilityEditId] = React.useState(null);
   const [isSubmittingAvailability, setIsSubmittingAvailability] = React.useState(false);
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
 
   const downloadRecentAttendance = React.useCallback(async () => {
     if (!isSupabaseEnabled || !supabasePublic) {
@@ -461,6 +482,123 @@ function App() {
       };
     });
   }, [allowedAvailabilityDetailsByDate, selectableAvailabilityDates]);
+
+  const getAvailabilityOccasionLabel = React.useCallback(
+    (dateValue) => {
+      const occasion = allowedAvailabilityDetailsByDate.get(dateValue)?.occasion;
+      if (occasion) {
+        return occasion;
+      }
+      if (isSundayDate(dateValue)) {
+        return 'Sunday service';
+      }
+      return '';
+    },
+    [allowedAvailabilityDetailsByDate]
+  );
+
+  const formatAvailabilityRuleLabel = (dateValue) => {
+    const occasion = getAvailabilityOccasionLabel(dateValue);
+    const dateLabel = formatAvailabilityDateLabel(dateValue);
+    return occasion ? `${dateLabel} — ${occasion}` : dateLabel;
+  };
+
+  const handleAvailabilityEditAction = (entry) => {
+    if (entry.status === 'approved' && !isLeadInstructor) {
+      setUpdateRequest({ entry, reason: entry.changeReason || '' });
+      return;
+    }
+    handleAvailabilityEdit(entry);
+  };
+
+  const getAvailabilityEditLabel = (entry) =>
+    entry.status === 'approved' && !isLeadInstructor ? 'Request edit' : 'Edit';
+
+  const handleAvailabilityDeleteAction = (entry) => {
+    if (entry.status !== 'approved' && isLeadInstructor) {
+      handleAvailabilityDelete(entry, 'Lead deletion');
+      return;
+    }
+    setDeleteRequest({ entry, reason: entry.changeReason || '' });
+  };
+
+  const getAvailabilityDeleteLabel = (entry) =>
+    entry.status === 'approved' || !isLeadInstructor ? 'Request delete' : 'Delete';
+
+  const handleAvailabilityApproval = (entry, status) => {
+    handleAvailabilityStatus(entry, status, approvalReasons[entry.id]);
+  };
+
+  const renderDeleteRequestForm = (entry) => (
+    <div className="availability-delete">
+      <label>
+        Reason for delete
+        <textarea
+          name="deleteReason"
+          value={deleteRequest.reason}
+          onChange={(event) =>
+            setDeleteRequest((prev) => ({
+              ...prev,
+              reason: event.target.value,
+            }))
+          }
+          placeholder="Why should this availability be deleted?"
+          required
+        />
+      </label>
+      <div className="panel__actions">
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => setDeleteRequest({ entry: null, reason: '' })}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => handleAvailabilityDelete(entry, deleteRequest.reason)}
+        >
+          Submit delete request
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderUpdateRequestForm = (entry) => (
+    <div className="availability-update">
+      <label>
+        Update reason
+        <textarea
+          value={updateRequest.reason}
+          onChange={(event) =>
+            setUpdateRequest((prev) => ({
+              ...prev,
+              reason: event.target.value,
+            }))
+          }
+          placeholder="Why should this availability be updated?"
+          required
+        />
+      </label>
+      <div className="panel__actions">
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => setUpdateRequest({ entry: null, reason: '' })}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => handleAvailabilityRequestEdit(entry, updateRequest.reason)}
+        >
+          Submit update request
+        </button>
+      </div>
+    </div>
+  );
 
   const persistAvailabilityRules = React.useCallback(
     async (nextDates, nextDetails, statusMessage) => {
@@ -631,58 +769,76 @@ function App() {
     }
   }, [selectedTeacher, currentInstructor]);
 
+  const fetchRecords = React.useCallback(
+    async ({ setViewOnAuth = false, showLoading = true } = {}) => {
+    if (!isSupabaseEnabled) {
+      return;
+    }
+
+    if (showLoading) {
+      setIsLoading(true);
+      setSupabaseStatus('');
+    } else {
+      setIsRefreshing(true);
+    }
+    setError('');
+    const [teachersResponse, childrenResponse] = await Promise.all([
+      supabasePublic.from('teachers').select('*').order('created_at', { ascending: false }),
+      supabasePublic.from('children').select('*').order('created_at', { ascending: false }),
+    ]);
+
+    if (teachersResponse.error || childrenResponse.error) {
+      const message = teachersResponse.error?.message || childrenResponse.error?.message;
+      setError(`Unable to load records from Supabase. ${message || 'Check your connection.'}`);
+      if (showLoading) {
+        setIsLoading(false);
+      } else {
+        setIsRefreshing(false);
+      }
+      return;
+    }
+
+    const mappedTeachers = (teachersResponse.data || []).map(mapTeacherFromDb);
+    const mappedChildren = (childrenResponse.data || []).map(mapChildFromDb);
+    setRecords({
+      teachers: mappedTeachers,
+      children: mappedChildren,
+    });
+    const storedId = localStorage.getItem(SIGNED_IN_KEY);
+    if (storedId) {
+      const matched = mappedTeachers.find((teacher) => teacher.id === storedId);
+      if (matched) {
+        setCurrentInstructor(matched);
+        if (setViewOnAuth) {
+          setView('home');
+        }
+      } else {
+        localStorage.removeItem(SIGNED_IN_KEY);
+      }
+    }
+    if (showLoading) {
+      setIsLoading(false);
+    } else {
+      setIsRefreshing(false);
+    }
+  }, []);
+
   React.useEffect(() => {
     if (!isSupabaseEnabled) {
       return undefined;
     }
-
-    let isActive = true;
-
-    const fetchRecords = async () => {
-      setIsLoading(true);
-      setError('');
-      setSupabaseStatus('');
-      const [teachersResponse, childrenResponse] = await Promise.all([
-        supabasePublic.from('teachers').select('*').order('created_at', { ascending: false }),
-        supabasePublic.from('children').select('*').order('created_at', { ascending: false }),
-      ]);
-
-      if (!isActive) {
-        return;
-      }
-
-      if (teachersResponse.error || childrenResponse.error) {
-        const message = teachersResponse.error?.message || childrenResponse.error?.message;
-        setError(`Unable to load records from Supabase. ${message || 'Check your connection.'}`);
-        setIsLoading(false);
-        return;
-      }
-
-      const mappedTeachers = (teachersResponse.data || []).map(mapTeacherFromDb);
-      const mappedChildren = (childrenResponse.data || []).map(mapChildFromDb);
-      setRecords({
-        teachers: mappedTeachers,
-        children: mappedChildren,
-      });
-      const storedId = localStorage.getItem(SIGNED_IN_KEY);
-      if (storedId) {
-        const matched = mappedTeachers.find((teacher) => teacher.id === storedId);
-        if (matched) {
-          setCurrentInstructor(matched);
-          setView('home');
-        } else {
-          localStorage.removeItem(SIGNED_IN_KEY);
-        }
-      }
-      setIsLoading(false);
+    const load = async () => {
+      await fetchRecords({ setViewOnAuth: true });
     };
+    load();
+    return undefined;
+  }, [fetchRecords]);
 
-    fetchRecords();
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
+  React.useEffect(() => {
+    if (['children', 'instructors', 'instructor', 'availability'].includes(view)) {
+      fetchRecords({ showLoading: false });
+    }
+  }, [fetchRecords, view]);
 
   React.useEffect(() => {
     fetchAvailability();
@@ -989,209 +1145,39 @@ function App() {
     setSelectedChild(null);
     setView('children');
   };
+  const handleChildCheckin = useChildCheckin({
+    attendanceActive,
+    selectedChild,
+    currentInstructor,
+    isSupabaseEnabled,
+    supabase,
+    createId,
+    setError,
+    setSupabaseStatus,
+    setIsUpdatingChildStatus,
+    setRecords,
+    setSelectedChild,
+    setStatusWithActor,
+  });
 
-  const handleChildCheckin = async (action) => {
-    if (!attendanceActive) {
-      setError('Attendance session is not active. Lead instructor must start the session.');
-      return;
-    }
-    if (!selectedChild) {
-      return;
-    }
-    setError('');
-    setSupabaseStatus('');
-    setIsUpdatingChildStatus(true);
-    const actionTimestamp = new Date().toISOString();
-    const updatedChild = {
-      ...selectedChild,
-      lastStatus: action,
-      lastActionAt: actionTimestamp,
-      signedIn: action === 'sign_in',
-      signedInUserId: action === 'sign_in'
-        ? currentInstructor?.id || selectedChild.signedInUserId || ''
-        : '',
-    };
-
-    if (isSupabaseEnabled) {
-      const { error: checkinError } = await supabase
-        .from('checkins')
-        .insert([
-          {
-            id: createId(),
-            child_id: selectedChild.id,
-            action,
-            created_at: actionTimestamp,
-          },
-        ]);
-      if (checkinError) {
-        setError(`Unable to ${action === 'sign_in' ? 'sign in' : 'sign out'}. ${checkinError.message}`);
-        setIsUpdatingChildStatus(false);
-        return;
-      }
-      const { error: statusError } = await supabase
-        .from('children')
-        .update({
-          last_status: action,
-          last_action_at: actionTimestamp,
-          signed_in: action === 'sign_in',
-          signed_in_user_id:
-            action === 'sign_in' ? currentInstructor?.id || null : null,
-        })
-        .eq('id', selectedChild.id);
-      if (statusError) {
-        setError(
-          `Signed ${action === 'sign_in' ? 'in' : 'out'}, but status update failed. ${statusError.message}`
-        );
-        setIsUpdatingChildStatus(false);
-        return;
-      }
-      setStatusWithActor(
-        `${selectedChild.name} ${action === 'sign_in' ? 'signed in' : 'signed out'} successfully.`
-      );
-    }
-
-    setRecords((prev) => ({
-      ...prev,
-      children: prev.children.map((child) =>
-        child.id === selectedChild.id ? updatedChild : child
-      ),
-    }));
-    setSelectedChild(updatedChild);
-    setIsUpdatingChildStatus(false);
-  };
-
-  const handleAddTeacher = async (event) => {
-    event.preventDefault();
-    if (!teacherForm.name.trim()) {
-      setError('Name is required.');
-      return;
-    }
-    if (!teacherForm.email.trim()) {
-      setError('Email is required for verification.');
-      return;
-    }
-    const emailValue = teacherForm.email.trim();
-    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailPattern.test(emailValue)) {
-      setError('Please provide a valid email address.');
-      return;
-    }
-    if (!teacherForm.role) {
-      setError('Please select a role.');
-      return;
-    }
-    const phoneValue = teacherForm.phone.trim();
-    if (phoneValue) {
-      if (/[A-Za-z]/.test(phoneValue)) {
-        setError('Phone number should not contain letters.');
-        return;
-      }
-      const onlyDigits = phoneValue.replace(/\D/g, '');
-      if (phoneValue.startsWith('+')) {
-        if (onlyDigits.length <= 11) {
-          setError('Phone numbers with + must include more than 11 digits.');
-          return;
-        }
-      } else if (onlyDigits.length !== 11) {
-        setError('Phone number must be 11 digits or include a + with more than 11 digits.');
-        return;
-      }
-    }
-    if (!teacherForm.password || teacherForm.password.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
-    if (teacherForm.password !== teacherForm.password2) {
-      setError('Passwords do not match.');
-      return;
-    }
-  const normalizedEmail = emailValue.toLowerCase();
-    const existingInstructor = records.teachers.find(
-      (teacher) => teacher.email?.toLowerCase() === normalizedEmail
-    );
-    if (existingInstructor) {
-      setError(
-        'This instructor has already been registered. Please contact your Lead Instructor for approval or sign in.'
-      );
-      return;
-    }
-    const passwordHash = await bcrypt.hash(teacherForm.password, 10);
-    const newTeacher = {
-      id: createId(),
-      name: teacherForm.name.trim(),
-  email: teacherForm.email.trim(),
-      phone: teacherForm.phone.trim(),
-      role: teacherForm.role,
-      passwordHash,
-      createdAt: new Date().toISOString(),
-      verified: false,
-      photoUrl: '',
-    };
-    if (isSupabaseEnabled) {
-      setError('');
-      setSupabaseStatus('');
-      const { data: existingData, error: existingError } = await supabase
-        .from('teachers')
-        .select('id')
-        .ilike('email', normalizedEmail)
-        .limit(1);
-      if (existingError) {
-        setError(`Unable to verify instructor. ${existingError.message}`);
-        return;
-      }
-      if (existingData && existingData.length > 0) {
-        setError(
-          'This instructor has already been registered. Please contact your Lead Instructor for approval or sign in.'
-        );
-        return;
-      }
-      if (teacherForm.photoFile) {
-        const fileExt = teacherForm.photoFile.name.split('.').pop();
-        const filePath = `instructors/${newTeacher.id}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage
-          .from(INSTRUCTOR_PHOTOS_BUCKET)
-          .upload(filePath, teacherForm.photoFile, {
-            upsert: true,
-            contentType: teacherForm.photoFile.type,
-          });
-        if (uploadError) {
-          setError(
-            `Unable to upload photo. ${uploadError.message} (Bucket: ${INSTRUCTOR_PHOTOS_BUCKET})`
-          );
-          return;
-        }
-        const { data: publicData } = supabase
-          .storage
-          .from(INSTRUCTOR_PHOTOS_BUCKET)
-          .getPublicUrl(filePath);
-        newTeacher.photoUrl = publicData?.publicUrl || '';
-      }
-
-      const { error: insertError } = await supabase
-        .from('teachers')
-        .insert([mapTeacherToDb(newTeacher)]);
-      if (insertError) {
-        setError(`Unable to save teacher. ${insertError.message}`);
-        return;
-      }
-      setStatusWithActor('Registration submitted. Awaiting Lead Instructor email verification.');
-    }
-    setRecords((prev) => ({
-      ...prev,
-      teachers: [newTeacher, ...prev.teachers],
-    }));
-    setTeacherForm({
-      name: '',
-      email: '',
-      phone: '',
-      role: 'Instructor',
-      password: '',
-      password2: '',
-      photoFile: null,
-    });
-    setPendingVerification(true);
-    setView(currentInstructor ? 'instructors' : 'login');
-  };
+  const handleAddTeacher = useInstructorRegistration({
+    teacherForm,
+    currentInstructor,
+    records,
+    bcrypt,
+    isSupabaseEnabled,
+    supabase,
+    INSTRUCTOR_PHOTOS_BUCKET,
+    createId,
+    mapTeacherToDb,
+    setError,
+    setSupabaseStatus,
+    setStatusWithActor,
+    setRecords,
+    setTeacherForm,
+    setPendingVerification,
+    setView,
+  });
 
   const handleDeleteTeacher = async (teacherId) => {
     if (!isLeadInstructor) {
@@ -1217,6 +1203,11 @@ function App() {
       return;
     }
     closeDeletePrompt();
+    let didSetDeleteStatus = false;
+    const setDeleteStatus = (message) => {
+      setStatusWithActor(message);
+      didSetDeleteStatus = true;
+    };
     if (isSupabaseEnabled) {
       setError('');
       setSupabaseStatus('');
@@ -1355,14 +1346,14 @@ function App() {
           return;
         }
         if ((emailDelete.data || []).length === 0) {
-          setStatusWithActor(
+          setDeleteStatus(
             'Instructor removed locally. No matching database record was found.'
           );
         } else {
-          setStatusWithActor('Instructor removed from data base.');
+          setDeleteStatus('Instructor removed from data base.');
         }
       } else {
-        setStatusWithActor('Instructor removed from data base.');
+        setDeleteStatus('Instructor removed from data base.');
       }
     }
     setRecords((prev) => ({
@@ -1380,122 +1371,20 @@ function App() {
       setCurrentInstructor(null);
       setView('login');
     }
+    if (!didSetDeleteStatus) {
+      setDeleteStatus('Instructor removed.');
+    }
   };
 
-  const handleVerifyTeacher = async (teacherId) => {
-    setError('');
-    setSupabaseStatus('');
-    if (isSupabaseEnabled) {
-      const { error: updateError } = await supabase
-        .from('teachers')
-        .update({ verified: true })
-        .eq('id', teacherId);
-      if (updateError) {
-        setError(
-          `Unable to verify instructor. ${updateError.message} (Check RLS update policy on public.teachers.)`
-        );
-        return;
-      }
-    }
-    setRecords((prev) => ({
-      ...prev,
-      teachers: prev.teachers.map((t) =>
-        t.id === teacherId ? { ...t, verified: true } : t
-      ),
-    }));
-    setStatusWithActor('Instructor verified.');
-  };
+  const handleVerifyTeacher = useInstructorVerification({
+    isSupabaseEnabled,
+    supabase,
+    setError,
+    setSupabaseStatus,
+    setRecords,
+    setStatusWithActor,
+  });
 
-  const pendingTeachers = React.useMemo(
-    () => records.teachers.filter((teacher) => !teacher.verified),
-    [records.teachers]
-  );
-  const verifiedTeachers = React.useMemo(
-    () =>
-      records.teachers
-        .filter((teacher) => teacher.verified)
-        .slice()
-        .sort((a, b) => {
-          const aLead = a.role?.toLowerCase().includes('lead') ? 1 : 0;
-          const bLead = b.role?.toLowerCase().includes('lead') ? 1 : 0;
-          if (aLead !== bLead) {
-            return bLead - aLead;
-          }
-          return (a.name || '').localeCompare(b.name || '');
-        }),
-    [records.teachers]
-  );
-
-  const filteredVerifiedTeachers = React.useMemo(() => {
-    if (!instructorSearch.trim()) {
-      return verifiedTeachers;
-    }
-    const query = instructorSearch.trim().toLowerCase();
-    return verifiedTeachers.filter((teacher) =>
-      [teacher.name, teacher.email, teacher.phone, teacher.role]
-        .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(query))
-    );
-  }, [verifiedTeachers, instructorSearch]);
-
-  const filteredPendingTeachers = React.useMemo(() => {
-    if (!instructorSearch.trim()) {
-      return pendingTeachers;
-    }
-    const query = instructorSearch.trim().toLowerCase();
-    return pendingTeachers.filter((teacher) =>
-      [teacher.name, teacher.email, teacher.phone, teacher.role]
-        .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(query))
-    );
-  }, [pendingTeachers, instructorSearch]);
-
-  const isLeadInstructor = currentInstructor?.role?.toLowerCase().includes('lead');
-
-  const approvedAvailability = React.useMemo(
-    () => availabilityEntries.filter((entry) => entry.status === 'approved'),
-    [availabilityEntries]
-  );
-  const approvedAvailabilityCalendar = React.useMemo(() => {
-    const grouped = new Map();
-    approvedAvailability.forEach((entry) => {
-      const dateKey = entry.date || 'unscheduled';
-      if (!grouped.has(dateKey)) {
-        grouped.set(dateKey, []);
-      }
-      grouped.get(dateKey).push(entry);
-    });
-    return Array.from(grouped.entries())
-      .sort(([a], [b]) => {
-        if (a === 'unscheduled') return 1;
-        if (b === 'unscheduled') return -1;
-        return new Date(a).getTime() - new Date(b).getTime();
-      })
-      .map(([dateKey, entries]) => {
-        const dateObject =
-          dateKey && dateKey !== 'unscheduled' ? new Date(`${dateKey}T00:00:00`) : null;
-        const label =
-          dateObject && !Number.isNaN(dateObject.getTime())
-            ? dateObject.toLocaleDateString(undefined, {
-                weekday: 'short',
-                month: 'short',
-                day: 'numeric',
-              })
-            : 'Unscheduled';
-        const sortedEntries = [...entries].sort((first, second) => {
-          const timeCompare = (first.startTime || '').localeCompare(second.startTime || '');
-          if (timeCompare !== 0) {
-            return timeCompare;
-          }
-          return (first.instructorName || '').localeCompare(second.instructorName || '');
-        });
-        return {
-          dateKey,
-          label,
-          entries: sortedEntries,
-        };
-      });
-  }, [approvedAvailability]);
   const pendingAvailability = React.useMemo(
     () =>
       availabilityEntries.filter((entry) =>
@@ -1653,330 +1542,55 @@ function App() {
     setSupabaseStatus('');
   };
 
-  const handleAvailabilityRequestEdit = async (entry, reasonOverride) => {
-    setError('');
-    setSupabaseStatus('');
-    const requestReason = reasonOverride || updateRequest.reason;
-    if (!requestReason || !requestReason.trim()) {
-      setError('Please provide a reason for updating.');
-      return;
-    }
-    if (isSupabaseEnabled) {
-      const { data, error: updateError } = await supabase
-        .from('availability')
-        .update({
-          status: 'pending',
-          approved_by: null,
-          approved_at: null,
-          change_reason: requestReason.trim(),
-        })
-        .eq('id', entry.id)
-        .select('*')
-        .maybeSingle();
-      if (updateError) {
-        setError(`Unable to request edit. ${updateError.message}`);
-        return;
-      }
-      if (data) {
-        const updated = mapAvailabilityFromDb(data);
-        setAvailabilityEntries((prev) =>
-          prev.map((item) => (item.id === entry.id ? updated : item))
-        );
-        handleAvailabilityEdit(updated);
-      }
-    } else {
-      const updated = {
-        ...entry,
-        status: 'pending',
-        approvedBy: '',
-        approvedAt: '',
-        changeReason: requestReason.trim(),
-      };
-      setAvailabilityEntries((prev) =>
-        prev.map((item) => (item.id === entry.id ? updated : item))
-      );
-      handleAvailabilityEdit(updated);
-    }
-    setUpdateRequest({ entry: null, reason: '' });
-    setSupabaseStatus('Edit request sent for approval.');
-  };
+  const {
+    verifiedTeachers,
+    filteredVerifiedTeachers,
+    filteredPendingTeachers,
+    isLeadInstructor,
+  } = useInstructorData({
+    teachers: records.teachers,
+    instructorSearch,
+    currentInstructor,
+  });
 
-  const handleAvailabilityReset = async (entry) => {
-    setError('');
-    setSupabaseStatus('');
-    if (isSupabaseEnabled) {
-      const { data, error: updateError } = await supabase
-        .from('availability')
-        .update({ status: 'pending', approved_by: null, approved_at: null })
-        .eq('id', entry.id)
-        .select('*')
-        .maybeSingle();
-      if (updateError) {
-        setError(`Unable to reset availability. ${updateError.message}`);
-        return;
-      }
-      if (data) {
-        setAvailabilityEntries((prev) =>
-          prev.map((item) => (item.id === entry.id ? mapAvailabilityFromDb(data) : item))
-        );
-      }
-    } else {
-      setAvailabilityEntries((prev) =>
-        prev.map((item) =>
-          item.id === entry.id
-            ? { ...item, status: 'pending', approvedBy: '', approvedAt: '' }
-            : item
-        )
-      );
-    }
-    setSupabaseStatus('Availability reset for approval.');
-  };
+  const {
+    requestEdit: handleAvailabilityRequestEdit,
+    resetApproval: handleAvailabilityReset,
+    deleteAvailability: handleAvailabilityDelete,
+    updateStatus: handleAvailabilityStatus,
+  } = useAvailabilityActions({
+    isLeadInstructor,
+    isSupabaseEnabled,
+    supabase,
+    currentInstructor,
+    approvalReasons,
+    deleteRequest,
+    updateRequest,
+    mapAvailabilityFromDb,
+    handleAvailabilityEdit,
+    setAvailabilityEntries,
+    setError,
+    setSupabaseStatus,
+    setDeleteRequest,
+    setUpdateRequest,
+    setApprovalReasons,
+  });
 
-  const handleAvailabilityDelete = async (entry, reasonOverride) => {
-    setError('');
-    setSupabaseStatus('');
-    if (entry.status !== 'approved' && isLeadInstructor) {
-      if (isSupabaseEnabled) {
-        const { data, error: deleteError } = await supabase
-          .from('availability')
-          .delete()
-          .eq('id', entry.id)
-          .select('id');
-        if (deleteError) {
-          setError(`Unable to delete availability. ${deleteError.message}`);
-          return;
-        }
-        if (!data || data.length === 0) {
-          setError(
-            'Unable to delete availability. Check delete policy on public.availability.'
-          );
-          return;
-        }
-      }
-      setAvailabilityEntries((prev) => prev.filter((item) => item.id !== entry.id));
-      setSupabaseStatus('Availability deleted.');
-      return;
-    }
+  const {
+    classOptions,
+    groupedChildren,
+    teacherLookup,
+    assignedChildren,
+  } = useChildrenData({
+    teachers: records.teachers,
+    children: records.children,
+    childSearch,
+    classFilter,
+    selectedTeacher,
+  });
 
-    const deleteReason = reasonOverride || deleteRequest.reason;
-    if (!deleteReason || !deleteReason.trim()) {
-      setError('Delete reason is required.');
-      return;
-    }
-
-    if (isSupabaseEnabled) {
-      const { data, error: updateError } = await supabase
-        .from('availability')
-        .update({
-          status: 'pending_delete',
-          approved_by: null,
-          approved_at: null,
-          change_reason: deleteReason.trim(),
-        })
-        .eq('id', entry.id)
-        .select('*')
-        .maybeSingle();
-      if (updateError) {
-        setError(`Unable to request delete. ${updateError.message}`);
-        return;
-      }
-      if (data) {
-        setAvailabilityEntries((prev) =>
-          prev.map((item) => (item.id === entry.id ? mapAvailabilityFromDb(data) : item))
-        );
-      }
-    } else {
-      setAvailabilityEntries((prev) =>
-        prev.map((item) =>
-          item.id === entry.id
-            ? { ...item, status: 'pending_delete', approvedBy: '', approvedAt: '' }
-            : item
-        )
-      );
-    }
-    setAvailabilityEntries((prev) =>
-      prev.map((item) =>
-        item.id === entry.id ? { ...item, changeReason: deleteReason.trim() } : item
-      )
-    );
-    setDeleteRequest({ entry: null, reason: '' });
-    setSupabaseStatus('Delete request sent for approval.');
-  };
-
-  const handleAvailabilityStatus = async (entry, action, reasonOverride) => {
-    if (!isLeadInstructor) {
-      setError('Only the lead instructor can approve availability.');
-      return;
-    }
-    setError('');
-    setSupabaseStatus('');
-    const approvalReason = reasonOverride || approvalReasons[entry.id] || '';
-    if (action === 'declined' && !approvalReason.trim()) {
-      setError('Please provide a reason for declining.');
-      return;
-    }
-    const normalizedApprovalReason = action === 'declined' ? approvalReason.trim() : '';
-    const isDeleteRequest = entry.status === 'pending_delete';
-    const nextStatus = action === 'approved' ? 'approved' : 'declined';
-    if (isSupabaseEnabled) {
-      if (isDeleteRequest && action === 'approved') {
-        const { data, error: deleteError } = await supabase
-          .from('availability')
-          .delete()
-          .eq('id', entry.id)
-          .select('id');
-        if (deleteError) {
-          setError(`Unable to delete availability. ${deleteError.message}`);
-          return;
-        }
-        if (!data || data.length === 0) {
-          setError(
-            'Unable to delete availability. Check delete policy on public.availability.'
-          );
-          return;
-        }
-        setAvailabilityEntries((prev) => prev.filter((item) => item.id !== entry.id));
-        setSupabaseStatus('Availability deleted.');
-        return;
-      }
-
-      const { data, error: updateError } = await supabase
-        .from('availability')
-        .update({
-          status: isDeleteRequest && action !== 'approved' ? 'approved' : nextStatus,
-          approved_by: currentInstructor?.id || null,
-          approved_at: new Date().toISOString(),
-          approval_reason: normalizedApprovalReason || null,
-        })
-        .eq('id', entry.id)
-        .select('*')
-        .maybeSingle();
-      if (updateError) {
-        setError(`Unable to update availability. ${updateError.message}`);
-        return;
-      }
-      if (data) {
-        setAvailabilityEntries((prev) =>
-          prev.map((item) => (item.id === entry.id ? mapAvailabilityFromDb(data) : item))
-        );
-      }
-    } else {
-      if (isDeleteRequest && action === 'approved') {
-        setAvailabilityEntries((prev) => prev.filter((item) => item.id !== entry.id));
-        setSupabaseStatus('Availability deleted.');
-        return;
-      }
-      setAvailabilityEntries((prev) =>
-        prev.map((item) =>
-          item.id === entry.id
-            ? {
-              ...item,
-              status: isDeleteRequest && action !== 'approved' ? 'approved' : nextStatus,
-              approvedBy: currentInstructor?.id || '',
-              approvedAt: new Date().toISOString(),
-              approvalReason: normalizedApprovalReason,
-            }
-            : item
-        )
-      );
-    }
-    setApprovalReasons((prev) => {
-      const next = { ...prev };
-      delete next[entry.id];
-      return next;
-    });
-    setSupabaseStatus(
-      isDeleteRequest
-        ? action === 'approved'
-          ? 'Availability deleted.'
-          : 'Delete request declined.'
-        : `Availability ${nextStatus}.`
-    );
-  };
-
-  const filteredChildren = React.useMemo(() => {
-    if (!childSearch.trim()) {
-      return records.children;
-    }
-    const query = childSearch.trim().toLowerCase();
-    return records.children.filter((child) =>
-      [child.name, child.guardianName, child.guardianContact, child.classCategory]
-        .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(query))
-    );
-  }, [records.children, childSearch]);
-
-  const classOptions = React.useMemo(() => {
-    const unique = new Set(
-      records.children
-        .map((child) => child.classCategory?.trim())
-        .filter(Boolean)
-    );
-    const priority = ['TenderFoot', 'Lighttroopers', 'Tribe of Truth', 'Celeb Teens'];
-    const sorted = Array.from(unique).sort((a, b) => {
-      const aIndex = priority.indexOf(a);
-      const bIndex = priority.indexOf(b);
-      if (aIndex !== -1 || bIndex !== -1) {
-        if (aIndex === -1) return 1;
-        if (bIndex === -1) return -1;
-        return aIndex - bIndex;
-      }
-      return a.localeCompare(b);
-    });
-    return ['all', ...sorted];
-  }, [records.children]);
-
-  const classFilteredChildren = React.useMemo(() => {
-    if (classFilter === 'all') {
-      return filteredChildren;
-    }
-    return filteredChildren.filter(
-      (child) => (child.classCategory?.trim() || 'Unassigned') === classFilter
-    );
-  }, [filteredChildren, classFilter]);
-
-  const groupedChildren = React.useMemo(() => {
-    const groups = classFilteredChildren.reduce((acc, child) => {
-      const key = child.classCategory?.trim() || 'Unassigned';
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push(child);
-      return acc;
-    }, {});
-    return Object.entries(groups)
-      .map(([category, children]) => ({
-        category,
-        children: children.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')),
-      }))
-      .sort((a, b) => {
-        const priority = ['TenderFoot', 'Lighttroopers', 'Tribe of Truth', 'Celeb Teens'];
-        const aIndex = priority.indexOf(a.category);
-        const bIndex = priority.indexOf(b.category);
-        if (aIndex !== -1 || bIndex !== -1) {
-          if (aIndex === -1) return 1;
-          if (bIndex === -1) return -1;
-          return aIndex - bIndex;
-        }
-        return a.category.localeCompare(b.category);
-      });
-  }, [classFilteredChildren]);
-
-  const teacherLookup = React.useMemo(
-    () =>
-      records.teachers.reduce((acc, teacher) => {
-        acc[teacher.id] = teacher.name;
-        return acc;
-      }, {}),
-    [records.teachers]
-  );
-
-  const assignedChildren = React.useMemo(
-    () =>
-      selectedTeacher
-        ? records.children.filter((child) => child.teacherId === selectedTeacher.id)
-        : [],
-    [records.children, selectedTeacher]
+  const { approvedAvailability, approvedAvailabilityCalendar } = useAvailabilityCalendar(
+    availabilityEntries
   );
 
   const qrCodeValue = selectedChild
@@ -1986,6 +1600,18 @@ function App() {
     : '';
 
   const activeView = !currentInstructor && view !== 'register' ? 'login' : view;
+
+  const handleProfileOpen = () => {
+    if (currentInstructor) {
+      setSelectedTeacher(currentInstructor);
+    }
+    setView('profile');
+  };
+
+  const handleApproveAvailabilityEntry = (entry) =>
+    handleAvailabilityApproval(entry, 'approved');
+  const handleDeclineAvailabilityEntry = (entry) =>
+    handleAvailabilityApproval(entry, 'declined');
 
   const registerInstructorForm = (
     <form className="form" onSubmit={handleAddTeacher}>
@@ -2071,1071 +1697,209 @@ function App() {
     </form>
   );
 
+  const instructorsView = (
+    <InstructorsView
+      instructorSearch={instructorSearch}
+      onSearchChange={(event) => setInstructorSearch(event.target.value)}
+      onBack={handleBackToHome}
+      filteredVerifiedTeachers={filteredVerifiedTeachers}
+      filteredPendingTeachers={filteredPendingTeachers}
+      isLeadInstructor={isLeadInstructor}
+      onOpenInstructor={openInstructor}
+      onCardKeyDown={handleCardKeyDown}
+      renderTeacherAvatar={renderTeacherAvatar}
+      onRemoveInstructor={handleDeleteTeacher}
+      onVerifyInstructor={handleVerifyTeacher}
+      onDenyInstructor={handleDeleteTeacher}
+    />
+  );
+
+  const childrenView = (
+    <ChildrenView
+      classFilter={classFilter}
+      onClassFilterChange={(event) => setClassFilter(event.target.value)}
+      classOptions={classOptions}
+      childSearch={childSearch}
+      onSearchChange={(event) => setChildSearch(event.target.value)}
+      groupedChildren={groupedChildren}
+      teacherLookup={teacherLookup}
+      onBack={handleBackToHome}
+      onOpenChild={openChild}
+      onCardKeyDown={handleCardKeyDown}
+    />
+  );
+
+  let viewContent = null;
+  switch (activeView) {
+    case 'login':
+      viewContent = (
+        <LoginView
+          loginForm={loginForm}
+          onChange={handleLoginChange}
+          onSubmit={handleLogin}
+          onRegister={() => setView('register')}
+        />
+      );
+      break;
+    case 'home':
+      viewContent = (
+        <HomeView
+          onChildren={() => setView('children')}
+          onInstructors={() => setView('instructors')}
+          onAvailability={() => setView('availability')}
+          attendanceStartDate={attendanceStartDate}
+          attendanceEndDate={attendanceEndDate}
+          onAttendanceStart={(event) => setAttendanceStartDate(event.target.value)}
+          onAttendanceEnd={(event) => setAttendanceEndDate(event.target.value)}
+          onDownloadAttendance={downloadRecentAttendance}
+        />
+      );
+      break;
+    case 'availability':
+      viewContent = (
+        <AvailabilityView
+          isLeadInstructor={isLeadInstructor}
+          availabilityRuleDate={availabilityRuleDate}
+          availabilityRuleOccasion={availabilityRuleOccasion}
+          onRuleDateChange={(event) => setAvailabilityRuleDate(event.target.value)}
+          onRuleOccasionChange={(event) => setAvailabilityRuleOccasion(event.target.value)}
+          onAddAllowedDate={handleAddAllowedDate}
+          isSavingAvailabilityRules={isSavingAvailabilityRules}
+          sortedAllowedAvailabilityDates={sortedAllowedAvailabilityDates}
+          formatAvailabilityRuleLabel={formatAvailabilityRuleLabel}
+          onRemoveAllowedDate={handleRemoveAllowedDate}
+          availabilityForm={availabilityForm}
+          onAvailabilityFormChange={handleAvailabilityFormChange}
+          availabilityEditId={availabilityEditId}
+          onSubmitAvailability={handleAvailabilitySubmit}
+          isSubmittingAvailability={isSubmittingAvailability}
+          onResetAvailabilityForm={resetAvailabilityForm}
+          selectableAvailabilityOptions={selectableAvailabilityOptions}
+          myAvailability={myAvailability}
+          formatAvailabilityStatus={formatAvailabilityStatus}
+          onEditAvailability={handleAvailabilityEditAction}
+          getEditLabel={getAvailabilityEditLabel}
+          onResetApproval={handleAvailabilityReset}
+          onDeleteAvailability={handleAvailabilityDeleteAction}
+          getDeleteLabel={getAvailabilityDeleteLabel}
+          deleteRequest={deleteRequest}
+          updateRequest={updateRequest}
+          renderDeleteRequestForm={renderDeleteRequestForm}
+          renderUpdateRequestForm={renderUpdateRequestForm}
+          pendingAvailability={pendingAvailability}
+          approvalReasons={approvalReasons}
+          onApprovalReasonChange={(entryId, value) =>
+            setApprovalReasons((prev) => ({ ...prev, [entryId]: value }))
+          }
+          onApproveAvailability={handleApproveAvailabilityEntry}
+          onDeclineAvailability={handleDeclineAvailabilityEntry}
+          approvedAvailability={approvedAvailability}
+          approvedAvailabilityCalendar={approvedAvailabilityCalendar}
+          onBack={() => setView('home')}
+        />
+      );
+      break;
+    case 'register':
+      viewContent = (
+        <RegisterView
+          isSignedIn={Boolean(currentInstructor)}
+          onBack={() => setView(currentInstructor ? 'instructors' : 'login')}
+          registerInstructorForm={registerInstructorForm}
+        />
+      );
+      break;
+    case 'instructors':
+      viewContent = instructorsView;
+      break;
+    case 'instructor':
+      viewContent = selectedTeacher ? (
+        <InstructorDetailView
+          selectedTeacher={selectedTeacher}
+          assignedChildren={assignedChildren}
+          isLeadInstructor={isLeadInstructor}
+          onBack={handleBackToInstructors}
+          onVerify={handleVerifyTeacher}
+          onDeny={handleDeleteTeacher}
+          onOpenChild={openChild}
+          onCardKeyDown={handleCardKeyDown}
+          renderTeacherAvatar={renderTeacherAvatar}
+        />
+      ) : (
+        instructorsView
+      );
+      break;
+    case 'profile':
+      viewContent = (
+        <ProfileView
+          profileForm={profileForm}
+          passwordForm={passwordForm}
+          isLeadInstructor={isLeadInstructor}
+          onBack={handleBackToInstructorDetails}
+          onProfileChange={handleProfileFormChange}
+          onPasswordChange={handlePasswordFormChange}
+          onProfileSubmit={handleProfileUpdate}
+          onPasswordSubmit={handlePasswordUpdate}
+        />
+      );
+      break;
+    case 'children':
+      viewContent = childrenView;
+      break;
+    case 'child':
+      viewContent = selectedChild ? (
+        <ChildView
+          selectedChild={selectedChild}
+          teacherLookup={teacherLookup}
+          qrCodeValue={qrCodeValue}
+          isUpdatingChildStatus={isUpdatingChildStatus}
+          onBack={handleBackToChildren}
+          onSignIn={() => handleChildCheckin('sign_in')}
+          onSignOut={() => handleChildCheckin('sign_out')}
+        />
+      ) : (
+        childrenView
+      );
+      break;
+    default:
+      viewContent = (
+        <HomeView
+          onChildren={() => setView('children')}
+          onInstructors={() => setView('instructors')}
+          onAvailability={() => setView('availability')}
+          attendanceStartDate={attendanceStartDate}
+          attendanceEndDate={attendanceEndDate}
+          onAttendanceStart={(event) => setAttendanceStartDate(event.target.value)}
+          onAttendanceEnd={(event) => setAttendanceEndDate(event.target.value)}
+          onDownloadAttendance={downloadRecentAttendance}
+        />
+      );
+      break;
+  }
+
   return (
     <div className="app">
-      {deletePrompt.isOpen && (
-        <div className="modal__backdrop" role="presentation">
-          <div className="modal" role="dialog" aria-modal="true">
-            <div className="modal__header">
-              <h2>Remove instructor</h2>
-            </div>
-            <p className="modal__body">
-              Remove {deletePrompt.teacherName}? Children assigned will become unassigned.
-            </p>
-            <div className="modal__actions">
-              <button type="button" className="ghost" onClick={closeDeletePrompt}>
-                Cancel
-              </button>
-              <button type="button" className="primary" onClick={confirmDeleteTeacher}>
-                Yes, remove
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      <header className="app__header">
-        <button
-          type="button"
-          className="app__brand"
-          onClick={() => setView('home')}
-          aria-label="Go to home"
-        >
-          <img
-            className="app__logo"
-            src={`${process.env.PUBLIC_URL}/logo/Asset 199.svg`}
-            alt="CCI logo"
-          />
-          <div>
-            <p className="app__eyebrow">CelebKids Admin</p>
-            <h1>Instructor Dashboard</h1>
-            <p className="app__subtitle">In Christ For Christ With Joy</p>
-          </div>
-        </button>
-        <div className="app__stats">
-          <div>
-            <span className="stat__label">Verified instructors</span>
-            <span className="stat__value">{verifiedTeachers.length}</span>
-          </div>
-          <div>
-            <span className="stat__label">Children</span>
-            <span className="stat__value">{records.children.length}</span>
-          </div>
-        </div>
-      </header>
-
-      <div className="app__status">
-        {currentInstructor && (
-          <div className="banner banner--signedin">
-            <div className="signedin__content">
-              {renderTeacherAvatar(currentInstructor, 40)}
-              <div>
-                <p className="signedin__label">Signed in</p>
-                <p className="signedin__name">{currentInstructor.name}</p>
-                <p className="signedin__role">
-                  {currentInstructor.role || 'Instructor'}
-                </p>
-              </div>
-            </div>
-            <div className="signedin__actions">
-              <button
-                type="button"
-                className="ghost signedin__action"
-                onClick={() => {
-                  if (currentInstructor) {
-                    setSelectedTeacher(currentInstructor);
-                  }
-                  setView('profile');
-                }}
-              >
-                Update profile
-              </button>
-              <button type="button" className="ghost signedin__action" onClick={handleSignOut}>
-                Sign out
-              </button>
-            </div>
-          </div>
-        )}
-        {isLoading && <p className="banner banner--info">Loading records…</p>}
-        {error && <p className="banner banner--error">{error}</p>}
-        {!error && supabaseStatus && <p className="banner banner--success">{supabaseStatus}</p>}
-      </div>
-
-      {activeView === 'login' ? (
-        <section className="panel">
-          <div className="panel__heading">
-            <h2>Instructor login</h2>
-          </div>
-          <form className="form" onSubmit={handleLogin}>
-            <div className="form__grid">
-              <label>
-                Email
-                <input
-                  name="email"
-                  type="email"
-                  value={loginForm.email}
-                  onChange={handleLoginChange}
-                  placeholder="instructor@email.com"
-                  required
-                />
-              </label>
-              <label>
-                Password
-                <input
-                  name="password"
-                  type="password"
-                  value={loginForm.password}
-                  onChange={handleLoginChange}
-                  placeholder="Enter your password"
-                  required
-                />
-              </label>
-            </div>
-            <button type="submit" className="primary">
-              Sign in
-            </button>
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => setView('register')}
-            >
-              Register instructor
-            </button>
-          </form>
-        </section>
-      ) : activeView === 'home' ? (
-        <section className="panel panel--home">
-          <div className="panel__heading">
-            <h2>Welcome</h2>
-          </div>
-          <div className="home__actions">
-            <button
-              type="button"
-              className="primary home__button"
-              onClick={() => setView('children')}
-            >
-              <span>
-                <strong>Children</strong>
-                <span className="home__hint">View, search, and manage child details</span>
-              </span>
-              <span className="home__arrow">→</span>
-            </button>
-            <button
-              type="button"
-              className="ghost home__button"
-              onClick={() => setView('instructors')}
-            >
-              <span>
-                <strong>Instructors</strong>
-                <span className="home__hint">Review, verify, and register instructors</span>
-              </span>
-              <span className="home__arrow">→</span>
-            </button>
-            <button
-              type="button"
-              className="ghost home__button"
-              onClick={() => setView('availability')}
-            >
-              <span>
-                <strong>Availability</strong>
-                <span className="home__hint">Submit and review availability</span>
-              </span>
-              <span className="home__arrow">→</span>
-            </button>
-          </div>
-          <div className="attendance-controls">
-            <div className="attendance-controls__dates">
-              <label>
-                Attendance start
-                <input
-                  type="date"
-                  value={attendanceStartDate}
-                  onChange={(event) => setAttendanceStartDate(event.target.value)}
-                />
-              </label>
-              <label>
-                Attendance end
-                <input
-                  type="date"
-                  value={attendanceEndDate}
-                  onChange={(event) => setAttendanceEndDate(event.target.value)}
-                />
-              </label>
-            </div>
-            <button
-              type="button"
-              className="ghost attendance-controls__download"
-              onClick={downloadRecentAttendance}
-            >
-              Download attendance
-            </button>
-          </div>
-        </section>
-      ) : activeView === 'availability' ? (
-        <section className="panel">
-          <div className="panel__heading">
-            <div>
-              <h2>Availability</h2>
-              <p className="panel__intro">
-                Submit your availability and view the approved schedule.
-              </p>
-            </div>
-            <button type="button" className="ghost" onClick={() => setView('home')}>
-              ← Back
-            </button>
-          </div>
-          <div className="availability-rules">
-            <div>
-              <h3>Availability rules</h3>
-              <p className="muted">
-                Availability is required every Sunday for all instructors. Other days must be enabled by the lead instructor.
-              </p>
-            </div>
-            {isLeadInstructor && (
-              <div className="availability-rules__controls">
-                <label>
-                  Allow extra date
-                  <input
-                    type="date"
-                    value={availabilityRuleDate}
-                    onChange={(event) => setAvailabilityRuleDate(event.target.value)}
-                  />
-                </label>
-                <label>
-                  Occasion
-                  <input
-                    type="text"
-                    value={availabilityRuleOccasion}
-                    onChange={(event) => setAvailabilityRuleOccasion(event.target.value)}
-                    placeholder="e.g. Special service"
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={handleAddAllowedDate}
-                  disabled={isSavingAvailabilityRules}
-                >
-                  {isSavingAvailabilityRules ? 'Saving…' : 'Add date'}
-                </button>
-              </div>
-            )}
-            {sortedAllowedAvailabilityDates.length === 0 ? (
-              <p className="empty">No extra dates enabled yet.</p>
-            ) : (
-              <div className="availability-rules__list">
-                {sortedAllowedAvailabilityDates.map((dateValue) => (
-                  <div key={dateValue} className="availability-rules__chip">
-                    <span>
-                      {formatAvailabilityDateLabel(dateValue)}
-                      {(() => {
-                        const occasion = allowedAvailabilityDetailsByDate.get(dateValue)?.occasion;
-                        if (occasion) {
-                          return ` — ${occasion}`;
-                        }
-                        if (isSundayDate(dateValue)) {
-                          return ' — Sunday service';
-                        }
-                        return '';
-                      })()}
-                    </span>
-                    {isLeadInstructor && (
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => handleRemoveAllowedDate(dateValue)}
-                        disabled={isSavingAvailabilityRules}
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <form className="form availability-form" onSubmit={handleAvailabilitySubmit}>
-            <div className="form__grid">
-              <label>
-                Date
-                <select
-                  name="date"
-                  value={availabilityForm.date}
-                  onChange={handleAvailabilityFormChange}
-                  disabled={Boolean(availabilityEditId)}
-                  required
-                >
-                  <option value="">Select a day</option>
-                  {selectableAvailabilityOptions.map((option) => (
-                    <option key={option.date} value={option.date}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Start time
-                <input
-                  type="time"
-                  name="startTime"
-                  value={availabilityForm.startTime}
-                  onChange={handleAvailabilityFormChange}
-                  required
-                />
-              </label>
-              <label>
-                End time
-                <input
-                  type="time"
-                  name="endTime"
-                  value={availabilityForm.endTime}
-                  onChange={handleAvailabilityFormChange}
-                  required
-                />
-              </label>
-              <label className="form__full">
-                Notes (optional)
-                <textarea
-                  name="notes"
-                  value={availabilityForm.notes}
-                  onChange={handleAvailabilityFormChange}
-                  placeholder="Add any extra details"
-                />
-              </label>
-              {availabilityEditId && (
-                <label className="form__full">
-                  Update reason
-                  <textarea
-                    name="changeReason"
-                    value={availabilityForm.changeReason}
-                    onChange={handleAvailabilityFormChange}
-                    placeholder="Why are you updating this availability?"
-                    required
-                  />
-                </label>
-              )}
-            </div>
-            <div className="panel__actions">
-              <button type="submit" className="primary" disabled={isSubmittingAvailability}>
-                {isSubmittingAvailability
-                  ? 'Submitting…'
-                  : availabilityEditId
-                    ? 'Update availability'
-                    : 'Submit availability'}
-              </button>
-              {availabilityEditId && (
-                <button type="button" className="ghost" onClick={resetAvailabilityForm}>
-                  Cancel edit
-                </button>
-              )}
-            </div>
-          </form>
-
-          <div className="availability-section">
-            <h3>My submissions</h3>
-            {myAvailability.length === 0 ? (
-              <p className="empty">No availability submitted yet.</p>
-            ) : (
-              <div className="list">
-                {myAvailability.map((entry) => (
-                  <div key={entry.id} className="card availability-card">
-                    <div>
-                      <div className="availability-card__title">
-                        <strong>{entry.date}</strong>
-                        <span
-                          className={`availability-status availability-status--${entry.status}`}
-                        >
-                          {formatAvailabilityStatus(entry.status)}
-                        </span>
-                      </div>
-                      <p className="muted">
-                        {entry.startTime} - {entry.endTime}
-                      </p>
-                      {entry.approvalReason && (
-                        <p className="muted">Disapproval reason: {entry.approvalReason}</p>
-                      )}
-                      {entry.changeReason && (
-                        <p className="muted">Update reason: {entry.changeReason}</p>
-                      )}
-                      {entry.notes && <p className="muted">{entry.notes}</p>}
-                    </div>
-                    <div className="panel__actions availability-actions">
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() =>
-                          entry.status === 'approved' && !isLeadInstructor
-                            ? setUpdateRequest({ entry, reason: entry.changeReason || '' })
-                            : handleAvailabilityEdit(entry)
-                        }
-                        disabled={entry.status === 'pending_delete'}
-                      >
-                        {entry.status === 'approved' && !isLeadInstructor ? 'Request edit' : 'Edit'}
-                      </button>
-                      {entry.status === 'pending' && (
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => handleAvailabilityReset(entry)}
-                        >
-                          Reset approval
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() =>
-                          entry.status !== 'approved' && isLeadInstructor
-                            ? handleAvailabilityDelete(entry, 'Lead deletion')
-                            : setDeleteRequest({ entry, reason: entry.changeReason || '' })
-                        }
-                      >
-                        {entry.status === 'approved' || !isLeadInstructor
-                          ? 'Request delete'
-                          : 'Delete'}
-                      </button>
-                    </div>
-                    {deleteRequest.entry?.id === entry.id && (
-                      <div className="availability-delete">
-                        <label>
-                          Reason for delete
-                          <textarea
-                            name="deleteReason"
-                            value={deleteRequest.reason}
-                            onChange={(event) =>
-                              setDeleteRequest((prev) => ({
-                                ...prev,
-                                reason: event.target.value,
-                              }))
-                            }
-                            placeholder="Why should this availability be deleted?"
-                            required
-                          />
-                        </label>
-                        <div className="panel__actions">
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => setDeleteRequest({ entry: null, reason: '' })}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            className="primary"
-                            onClick={() => handleAvailabilityDelete(entry, deleteRequest.reason)}
-                          >
-                            Submit delete request
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {updateRequest.entry?.id === entry.id && (
-                      <div className="availability-update">
-                        <label>
-                          Update reason
-                          <textarea
-                            value={updateRequest.reason}
-                            onChange={(event) =>
-                              setUpdateRequest((prev) => ({
-                                ...prev,
-                                reason: event.target.value,
-                              }))
-                            }
-                            placeholder="Why should this availability be updated?"
-                            required
-                          />
-                        </label>
-                        <div className="panel__actions">
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => setUpdateRequest({ entry: null, reason: '' })}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            className="primary"
-                            onClick={() =>
-                              handleAvailabilityRequestEdit(entry, updateRequest.reason)
-                            }
-                          >
-                            Submit update request
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {isLeadInstructor && (
-            <div className="availability-section">
-              <h3>Pending approvals</h3>
-              {pendingAvailability.length === 0 ? (
-                <p className="empty">No pending availability.</p>
-              ) : (
-                <div className="list">
-                  {pendingAvailability.map((entry) => (
-                    <div key={entry.id} className="card availability-card">
-                      <div>
-                        <div className="availability-card__title">
-                          <strong>{entry.instructorName || 'Instructor'}</strong>
-                          <span
-                            className={`availability-status availability-status--${entry.status}`}
-                          >
-                            {formatAvailabilityStatus(entry.status)}
-                          </span>
-                        </div>
-                        <p className="muted">
-                          {entry.date} · {entry.startTime} - {entry.endTime}
-                        </p>
-                        {entry.approvalReason && (
-                          <p className="muted">Disapproval reason: {entry.approvalReason}</p>
-                        )}
-                        {entry.changeReason && (
-                          <p className="muted">Update reason: {entry.changeReason}</p>
-                        )}
-                        {entry.notes && <p className="muted">{entry.notes}</p>}
-                      </div>
-                      <div className="availability-approval">
-                        <label>
-                          Disapproval reason (required to decline)
-                          <textarea
-                            value={approvalReasons[entry.id] || ''}
-                            onChange={(event) =>
-                              setApprovalReasons((prev) => ({
-                                ...prev,
-                                [entry.id]: event.target.value,
-                              }))
-                            }
-                            placeholder="Why are you declining this availability?"
-                            required
-                          />
-                        </label>
-                      </div>
-                      <div className="panel__actions">
-                        {entry.status === 'pending_delete' ? (
-                          <>
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() =>
-                                handleAvailabilityStatus(entry, 'approved', approvalReasons[entry.id])
-                              }
-                            >
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() =>
-                                handleAvailabilityStatus(entry, 'declined', approvalReasons[entry.id])
-                              }
-                            >
-                              Deny
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() =>
-                                handleAvailabilityStatus(entry, 'approved', approvalReasons[entry.id])
-                              }
-                            >
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() =>
-                                handleAvailabilityStatus(entry, 'declined', approvalReasons[entry.id])
-                              }
-                            >
-                              Decline
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="availability-section">
-            <h3>Approved availability calendar</h3>
-            {approvedAvailability.length === 0 ? (
-              <p className="empty">No approved availability yet.</p>
-            ) : (
-              <div className="availability-calendar">
-                {approvedAvailabilityCalendar.map((day) => (
-                  <div key={day.dateKey} className="availability-day">
-                    <div className="availability-day__header">
-                      <strong>{day.label}</strong>
-                      {day.dateKey !== 'unscheduled' && (
-                        <span className="muted">{day.dateKey}</span>
-                      )}
-                    </div>
-                    <div className="availability-day__slots">
-                      {day.entries.map((entry) => (
-                        <div key={entry.id} className="availability-slot">
-                          <div>
-                            <div className="availability-slot__name">
-                              {entry.instructorName || 'Instructor'}
-                            </div>
-                            <div className="availability-slot__time">
-                              {entry.startTime && entry.endTime
-                                ? `${entry.startTime} - ${entry.endTime}`
-                                : 'Time not set'}
-                            </div>
-                          </div>
-                          {entry.notes && (
-                            <div className="availability-slot__notes">{entry.notes}</div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      ) : activeView === 'register' ? (
-        <section className="panel panel--register">
-          <div className="panel__heading">
-            <div>
-              <h2>Register instructor</h2>
-              <p className="panel__intro">
-                Provide instructor details and a secure password to create the account.
-              </p>
-            </div>
-            <button
-              type="button"
-              className="ghost"
-              onClick={currentInstructor ? handleBackToInstructors : () => setView('login')}
-            >
-              {currentInstructor ? 'Back to instructors' : 'Back to login'}
-            </button>
-          </div>
-          {registerInstructorForm}
-        </section>
-      ) : activeView === 'instructor' && selectedTeacher ? (
-        <section className="panel">
-          <div className="panel__heading">
-            <h2>{selectedTeacher.name}</h2>
-            <div className="panel__actions">
-              <button type="button" className="ghost" onClick={handleBackToInstructors}>
-                Back to instructors
-              </button>
-              {!selectedTeacher.verified && isLeadInstructor && (
-                <>
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={() => handleVerifyTeacher(selectedTeacher.id)}
-                  >
-                    Verify instructor
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => handleDeleteTeacher(selectedTeacher.id)}
-                  >
-                    Deny registration
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-          <div className="card card--stack">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              {renderTeacherAvatar(selectedTeacher, 56)}
-              <div>
-                <h3>{selectedTeacher.role}</h3>
-                <p className="muted">
-                  {selectedTeacher.verified ? 'Verified instructor' : 'Pending verification'}
-                </p>
-              </div>
-            </div>
-            <div className="meta">
-              <span>Email: {selectedTeacher.email || 'No email provided'}</span>
-              <span>Phone: {selectedTeacher.phone || 'No phone provided'}</span>
-              <span>
-                Joined:{' '}
-                {selectedTeacher.createdAt
-                  ? new Date(selectedTeacher.createdAt).toLocaleDateString()
-                  : 'Unknown'}
-              </span>
-            </div>
-          </div>
-          <div className="panel__sublist">
-            <h3>Assigned children</h3>
-            {assignedChildren.length === 0 ? (
-              <p className="empty">No children assigned to this instructor yet.</p>
-            ) : (
-              assignedChildren.map((child) => (
-                <article
-                  key={child.id}
-                  className="card"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => openChild(child)}
-                  onKeyDown={(event) => handleCardKeyDown(event, () => openChild(child))}
-                >
-                  <div>
-                    <h4>{child.name}</h4>
-                    <p className="muted">Class: {child.classCategory || 'Unassigned'}</p>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
-      ) : activeView === 'profile' && selectedTeacher && currentInstructor?.id === selectedTeacher.id ? (
-        <section className="panel panel--register">
-          <div className="panel__heading">
-            <div>
-              <h2>Update profile</h2>
-              <p className="panel__intro">Edit your contact details, role, or photo.</p>
-            </div>
-            <button type="button" className="ghost" onClick={handleBackToInstructorDetails}>
-              Back to details
-            </button>
-          </div>
-          <div className="panel__sublist">
-            <form className="form" onSubmit={handleProfileUpdate}>
-              <div className="form__grid">
-                <label>
-                  Name*
-                  <input
-                    name="name"
-                    value={profileForm.name}
-                    onChange={handleProfileFormChange}
-                    required
-                  />
-                </label>
-                <label>
-                  Role
-                  <select
-                    name="role"
-                    value={profileForm.role}
-                    onChange={handleProfileFormChange}
-                    disabled={isLeadInstructor}
-                  >
-                    <option>Lead Instructor</option>
-                    <option>Instructor</option>
-                    <option>Support</option>
-                    <option>Volunteer</option>
-                  </select>
-                </label>
-                <label>
-                  Email*
-                  <input
-                    name="email"
-                    type="email"
-                    value={profileForm.email}
-                    onChange={handleProfileFormChange}
-                    required
-                  />
-                </label>
-                <label>
-                  Phone
-                  <input
-                    name="phone"
-                    value={profileForm.phone}
-                    onChange={handleProfileFormChange}
-                  />
-                </label>
-                <label className="form__full">
-                  Update photo (optional)
-                  <input
-                    name="photoFile"
-                    type="file"
-                    accept="image/*"
-                    onChange={handleProfileFormChange}
-                  />
-                </label>
-              </div>
-              <button type="submit" className="primary">
-                Save profile changes
-              </button>
-            </form>
-          </div>
-          <div className="panel__sublist">
-            <h3>Change password</h3>
-            <form className="form" onSubmit={handlePasswordUpdate}>
-              <div className="form__grid">
-                <label>
-                  Current password
-                  <input
-                    name="currentPassword"
-                    type="password"
-                    value={passwordForm.currentPassword}
-                    onChange={handlePasswordFormChange}
-                    required
-                  />
-                </label>
-                <label>
-                  New password
-                  <input
-                    name="nextPassword"
-                    type="password"
-                    value={passwordForm.nextPassword}
-                    onChange={handlePasswordFormChange}
-                    required
-                    minLength={6}
-                  />
-                </label>
-                <label>
-                  Confirm new password
-                  <input
-                    name="confirmPassword"
-                    type="password"
-                    value={passwordForm.confirmPassword}
-                    onChange={handlePasswordFormChange}
-                    required
-                    minLength={6}
-                  />
-                </label>
-              </div>
-              <button type="submit" className="primary">
-                Update password
-              </button>
-            </form>
-          </div>
-        </section>
-      ) : activeView === 'child' && selectedChild ? (
-        <section className="panel">
-          <div className="panel__heading">
-            <h2>{selectedChild.name}</h2>
-            <div className="panel__actions">
-              <button type="button" className="ghost" onClick={handleBackToChildren}>
-                Back to children
-              </button>
-              <button
-                type="button"
-                className="ghost"
-                disabled={isUpdatingChildStatus}
-                onClick={() => handleChildCheckin('sign_in')}
-              >
-                Sign in
-              </button>
-              <button
-                type="button"
-                className="ghost"
-                disabled={isUpdatingChildStatus}
-                onClick={() => handleChildCheckin('sign_out')}
-              >
-                Sign out
-              </button>
-            </div>
-          </div>
-          <div className="card card--stack">
-            <div>
-              <div className="meta">
-                <span>Class: {selectedChild.classCategory || 'Unassigned'}</span>
-                <span>Guardian: {selectedChild.guardianName || 'No guardian listed'}</span>
-                <span>Contact: {selectedChild.guardianContact || 'No contact listed'}</span>
-                <span>Assigned: {teacherLookup[selectedChild.teacherId] || 'Unassigned'}</span>
-              </div>
-              <p className="muted">Last status: {selectedChild.lastStatus || 'No activity yet'}</p>
-            </div>
-            <div className="qr-code">
-              <QRCodeCanvas value={qrCodeValue} size={180} includeMargin />
-              <p className="muted">Scan to open child record.</p>
-            </div>
-          </div>
-        </section>
-      ) : activeView === 'instructors' ? (
-        <div className="app__main">
-          <section className="panel">
-            <div className="panel__heading">
-              <h2>Instructors</h2>
-              <div className="panel__actions">
-                <input
-                  type="search"
-                  value={instructorSearch}
-                  onChange={(event) => setInstructorSearch(event.target.value)}
-                  placeholder="Search instructors"
-                  aria-label="Search instructors"
-                />
-                <button type="button" className="ghost" onClick={handleBackToHome} aria-label="Back">
-                  ←
-                </button>
-              </div>
-            </div>
-            <div className="list">
-              {filteredVerifiedTeachers.length === 0 ? (
-                <p className="empty">No verified instructors yet. Add your first instructor above.</p>
-              ) : (
-                filteredVerifiedTeachers.map((teacher) => (
-                  <article
-                    key={teacher.id}
-                    className="card"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => openInstructor(teacher)}
-                    onKeyDown={(event) => handleCardKeyDown(event, () => openInstructor(teacher))}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        {renderTeacherAvatar(teacher)}
-                        <div>
-                          <h3>{teacher.name}</h3>
-                          <p className="muted">{teacher.role}</p>
-                        </div>
-                      </div>
-                      <div className="meta">
-                        <span>{teacher.email || 'No email'}</span>
-                        <span>{teacher.phone || 'No phone'}</span>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      {isLeadInstructor &&
-                        !teacher.role?.toLowerCase().includes('lead') && (
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleDeleteTeacher(teacher.id);
-                            }}
-                          >
-                            Remove
-                          </button>
-                        )}
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-            <div className="panel__sublist">
-              <h3>Pending Instructor Verifications</h3>
-              {filteredPendingTeachers.length === 0 ? (
-                <p className="empty">No pending verifications.</p>
-              ) : (
-                filteredPendingTeachers.map((teacher) => (
-                  <article
-                    key={teacher.id}
-                    className="card"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => openInstructor(teacher)}
-                    onKeyDown={(event) => handleCardKeyDown(event, () => openInstructor(teacher))}
-                  >
-                    <div>
-                      <h4>{teacher.name}</h4>
-                      <p className="muted">{teacher.role}</p>
-                      <span>{teacher.email}</span>
-                      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                        {isLeadInstructor && (
-                          <>
-                            <button
-                              type="button"
-                              className="primary"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                handleVerifyTeacher(teacher.id);
-                              }}
-                            >
-                              Verify
-                            </button>
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                handleDeleteTeacher(teacher.id);
-                              }}
-                            >
-                              Deny
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </section>
-        </div>
-      ) : activeView === 'children' ? (
-        <section className="panel">
-          <div className="panel__heading">
-            <h2>Celebkids / Teens</h2>
-            <div className="panel__actions">
-              <button type="button" className="ghost" onClick={handleBackToHome} aria-label="Back">
-                ←
-              </button>
-              <select
-                className="search"
-                value={classFilter}
-                onChange={(event) => setClassFilter(event.target.value)}
-                aria-label="Filter by class"
-              >
-                {classOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option === 'all' ? 'All classes' : option}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="search"
-                type="search"
-                placeholder="Search children"
-                value={childSearch}
-                onChange={(event) => setChildSearch(event.target.value)}
-              />
-            </div>
-          </div>
-          <div className="list">
-            {groupedChildren.length === 0 ? (
-              <p className="empty">No children found.</p>
-            ) : (
-              groupedChildren.map((group) => (
-                <div key={group.category} className="list-section">
-                  <h3 className="list-section__title">{group.category}</h3>
-                  <div className="list">
-                    {group.children.map((child) => (
-                      <article
-                        key={child.id}
-                        className={`card${child.signedIn ? ' card--signedin' : ''}`}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => openChild(child)}
-                        onKeyDown={(event) => handleCardKeyDown(event, () => openChild(child))}
-                      >
-                        <div>
-                          <div className="card__title">
-                            <h4>{child.name}</h4>
-                            {child.signedIn && (
-                              <span className="badge badge--signedin">Signed in</span>
-                            )}
-                          </div>
-                          <div className="meta">
-                            <span>Age: {child.age || 'Not provided'}</span>
-                            <span>Guardian: {child.guardianName || 'No guardian listed'}</span>
-                            <span>Contact: {child.guardianContact || 'No contact listed'}</span>
-                            <span>Assigned: {teacherLookup[child.teacherId] || 'Unassigned'}</span>
-                          </div>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-      ) : null}
+      <AppHeader
+        verifiedCount={verifiedTeachers.length}
+        childrenCount={records.children.length}
+        onHome={() => setView(currentInstructor ? 'home' : 'login')}
+        isRefreshing={isRefreshing}
+      />
+      <AppStatus
+        currentInstructor={currentInstructor}
+        isLoading={isLoading}
+        error={error}
+        supabaseStatus={supabaseStatus}
+        onProfile={handleProfileOpen}
+        onSignOut={handleSignOut}
+        renderTeacherAvatar={renderTeacherAvatar}
+      />
+      {viewContent}
+      <DeleteInstructorModal
+        isOpen={deletePrompt.isOpen}
+        teacherName={deletePrompt.teacherName}
+        onCancel={closeDeletePrompt}
+        onConfirm={confirmDeleteTeacher}
+      />
     </div>
   );
 }
