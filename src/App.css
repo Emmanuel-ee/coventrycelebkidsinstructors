@@ -191,6 +191,51 @@
   min-height: 38px;
 }
 
+.form__label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #30364d;
+  margin-bottom: 6px;
+}
+
+.availability-options {
+  display: grid;
+  gap: 10px;
+  border-radius: 12px;
+  border: 1px solid #d6d9e8;
+  background: #fafbff;
+  padding: 12px;
+}
+
+.availability-options__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.availability-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #30364d;
+}
+
+.availability-option input {
+  min-height: auto;
+}
+
+.availability-review {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  color: #4b5563;
+  font-size: 0.9rem;
+}
+
 .availability-rules {
   border: 1px solid #e3e6f3;
   border-radius: 14px;

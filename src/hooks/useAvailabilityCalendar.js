@@ -33,13 +33,9 @@ const useAvailabilityCalendar = (availabilityEntries) => {
                 day: 'numeric',
               })
             : 'Unscheduled';
-        const sortedEntries = [...entries].sort((first, second) => {
-          const timeCompare = (first.startTime || '').localeCompare(second.startTime || '');
-          if (timeCompare !== 0) {
-            return timeCompare;
-          }
-          return (first.instructorName || '').localeCompare(second.instructorName || '');
-        });
+        const sortedEntries = [...entries].sort((first, second) =>
+          (first.instructorName || '').localeCompare(second.instructorName || '')
+        );
         return {
           dateKey,
           label,

@@ -123,8 +123,6 @@ const mapAvailabilityFromDb = (availability) => ({
   instructorId: availability.instructor_id || availability.instructorId || '',
   instructorName: availability.instructor_name || availability.instructorName || '',
   date: availability.date || availability.available_date || availability.availableDate || '',
-  startTime: availability.start_time || availability.startTime || '',
-  endTime: availability.end_time || availability.endTime || '',
   notes: availability.notes || '',
   changeReason: availability.change_reason || availability.changeReason || '',
   approvalReason: availability.approval_reason || availability.approvalReason || '',
@@ -139,8 +137,6 @@ const mapAvailabilityToDb = (availability) => ({
   instructor_id: availability.instructorId,
   instructor_name: availability.instructorName,
   date: availability.date || null,
-  start_time: availability.startTime || null,
-  end_time: availability.endTime || null,
   notes: availability.notes || null,
   change_reason: availability.changeReason || null,
   approval_reason: availability.approvalReason || null,
@@ -295,8 +291,7 @@ function App() {
   const [availabilityEntries, setAvailabilityEntries] = React.useState([]);
   const [availabilityForm, setAvailabilityForm] = React.useState({
     date: '',
-    startTime: '',
-    endTime: '',
+    selectedDates: [],
     notes: '',
     changeReason: '',
   });
@@ -304,11 +299,6 @@ function App() {
     entry: null,
     reason: '',
   });
-  const [updateRequest, setUpdateRequest] = React.useState({
-    entry: null,
-    reason: '',
-  });
-  const [availabilityEditOriginalDate, setAvailabilityEditOriginalDate] = React.useState('');
   const [approvalReasons, setApprovalReasons] = React.useState({});
   const [allowedAvailabilityDates, setAllowedAvailabilityDates] = React.useState([]);
   const [allowedAvailabilityDetails, setAllowedAvailabilityDetails] = React.useState([]);
@@ -435,7 +425,7 @@ function App() {
       .from('availability')
       .select('*')
       .order('date', { ascending: true })
-      .order('start_time', { ascending: true });
+  .order('created_at', { ascending: true });
     if (fetchError) {
       setError(`Unable to load availability. ${fetchError.message}`);
       return;
@@ -501,27 +491,16 @@ function App() {
     return occasion ? `${dateLabel} — ${occasion}` : dateLabel;
   };
 
-  const handleAvailabilityEditAction = (entry) => {
-    if (entry.status === 'approved' && !isLeadInstructor) {
-      setUpdateRequest({ entry, reason: entry.changeReason || '' });
-      return;
-    }
-    handleAvailabilityEdit(entry);
-  };
-
-  const getAvailabilityEditLabel = (entry) =>
-    entry.status === 'approved' && !isLeadInstructor ? 'Request edit' : 'Edit';
-
   const handleAvailabilityDeleteAction = (entry) => {
-    if (entry.status !== 'approved' && isLeadInstructor) {
-      handleAvailabilityDelete(entry, 'Lead deletion');
+    if (entry.status !== 'approved') {
+      handleAvailabilityDelete(entry);
       return;
     }
     setDeleteRequest({ entry, reason: entry.changeReason || '' });
   };
 
   const getAvailabilityDeleteLabel = (entry) =>
-    entry.status === 'approved' || !isLeadInstructor ? 'Request delete' : 'Delete';
+    entry.status === 'approved' ? 'Request delete' : 'Delete';
 
   const handleAvailabilityApproval = (entry, status) => {
     handleAvailabilityStatus(entry, status, approvalReasons[entry.id]);
@@ -563,40 +542,6 @@ function App() {
     </div>
   );
 
-  const renderUpdateRequestForm = (entry) => (
-    <div className="availability-update">
-      <label>
-        Update reason
-        <textarea
-          value={updateRequest.reason}
-          onChange={(event) =>
-            setUpdateRequest((prev) => ({
-              ...prev,
-              reason: event.target.value,
-            }))
-          }
-          placeholder="Why should this availability be updated?"
-          required
-        />
-      </label>
-      <div className="panel__actions">
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => setUpdateRequest({ entry: null, reason: '' })}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="primary"
-          onClick={() => handleAvailabilityRequestEdit(entry, updateRequest.reason)}
-        >
-          Submit update request
-        </button>
-      </div>
-    </div>
-  );
 
   const persistAvailabilityRules = React.useCallback(
     async (nextDates, nextDetails, statusMessage) => {
@@ -673,6 +618,29 @@ function App() {
     setAvailabilityForm((prev) => ({
       ...prev,
       [name]: value,
+    }));
+  };
+
+  const handleAvailabilityDateToggle = (dateValue) => {
+    setAvailabilityForm((prev) => {
+      if (prev.selectedDates.includes(dateValue)) {
+        return {
+          ...prev,
+          selectedDates: prev.selectedDates.filter((date) => date !== dateValue),
+        };
+      }
+      return {
+        ...prev,
+        selectedDates: [...prev.selectedDates, dateValue],
+      };
+    });
+  };
+
+  const handleAvailabilityDatesSet = (dates) => {
+    const nextDates = Array.from(new Set(dates)).filter(Boolean);
+    setAvailabilityForm((prev) => ({
+      ...prev,
+      selectedDates: nextDates,
     }));
   };
 
@@ -1390,13 +1358,11 @@ function App() {
   const resetAvailabilityForm = React.useCallback(() => {
     setAvailabilityForm({
       date: '',
-      startTime: '',
-      endTime: '',
+      selectedDates: [],
       notes: '',
       changeReason: '',
     });
     setAvailabilityEditId(null);
-    setAvailabilityEditOriginalDate('');
   }, []);
 
   const handleAvailabilitySubmit = async (event) => {
@@ -1405,23 +1371,28 @@ function App() {
       setError('Please sign in before submitting availability.');
       return;
     }
-    if (!availabilityForm.date || !availabilityForm.startTime || !availabilityForm.endTime) {
-      setError('Please provide date, start time, and end time for availability.');
+    const selectedDates = availabilityEditId
+      ? availabilityForm.date
+        ? [availabilityForm.date]
+        : []
+      : availabilityForm.selectedDates;
+    if (selectedDates.length === 0) {
+      setError(
+        availabilityEditId
+          ? 'Please provide a date for availability.'
+          : 'Please select at least one availability date.'
+      );
       return;
-    }
-    if (availabilityEditId && availabilityEditOriginalDate) {
-      if (availabilityForm.date !== availabilityEditOriginalDate) {
-        setError('You can only edit the time for the same day.');
-        return;
-      }
     }
     if (availabilityEditId && !availabilityForm.changeReason.trim()) {
       setError('Please provide a reason for updating this availability.');
       return;
     }
     if (
-      !isSundayDate(availabilityForm.date) &&
-      !allowedAvailabilityDates.includes(availabilityForm.date)
+      selectedDates.some(
+        (dateValue) =>
+          !isSundayDate(dateValue) && !allowedAvailabilityDates.includes(dateValue)
+      )
     ) {
       setError('Availability is required every Sunday. Other days must be enabled by the lead instructor.');
       return;
@@ -1430,18 +1401,17 @@ function App() {
     setError('');
     setSupabaseStatus('');
     const isEditing = Boolean(availabilityEditId);
-    const newEntry = {
+    const entriesToSave = selectedDates.map((dateValue) => ({
       id: availabilityEditId || createId(),
       instructorId: currentInstructor.id,
       instructorName: currentInstructor.name,
-      date: availabilityForm.date,
-      startTime: availabilityForm.startTime,
-      endTime: availabilityForm.endTime,
+      date: dateValue,
       notes: availabilityForm.notes,
       changeReason: availabilityForm.changeReason.trim(),
       status: 'pending',
       createdAt: new Date().toISOString(),
-    };
+    }));
+    const newEntry = entriesToSave[0];
     try {
       if (isSupabaseEnabled) {
         if (isEditing) {
@@ -1449,8 +1419,6 @@ function App() {
             .from('availability')
             .update({
               date: newEntry.date,
-              start_time: newEntry.startTime,
-              end_time: newEntry.endTime,
               notes: newEntry.notes || null,
               change_reason: newEntry.changeReason || null,
               status: 'pending',
@@ -1474,15 +1442,22 @@ function App() {
         } else {
           const { data, error: insertError } = await supabase
             .from('availability')
-            .insert([mapAvailabilityToDb(newEntry)])
-            .select('*')
-            .maybeSingle();
+            .insert(entriesToSave.map(mapAvailabilityToDb))
+            .select('*');
           if (insertError) {
             setError(`Unable to submit availability. ${insertError.message}`);
             return;
           }
-          if (data) {
-            setAvailabilityEntries((prev) => [mapAvailabilityFromDb(data), ...prev]);
+          if (data && data.length) {
+            const mappedEntries = Array.isArray(data)
+              ? data.map(mapAvailabilityFromDb)
+              : [mapAvailabilityFromDb(data)];
+            setAvailabilityEntries((prev) => [...mappedEntries, ...prev]);
+          } else {
+            setAvailabilityEntries((prev) => [...entriesToSave, ...prev]);
+            if (supabasePublic) {
+              await fetchAvailability();
+            }
           }
         }
       } else {
@@ -1493,8 +1468,6 @@ function App() {
                 ? {
                   ...entry,
                   date: newEntry.date,
-                  startTime: newEntry.startTime,
-                  endTime: newEntry.endTime,
                   notes: newEntry.notes,
                   changeReason: newEntry.changeReason,
                   status: 'pending',
@@ -1505,7 +1478,7 @@ function App() {
             )
           );
         } else {
-          setAvailabilityEntries((prev) => [newEntry, ...prev]);
+          setAvailabilityEntries((prev) => [...entriesToSave, ...prev]);
         }
       }
       resetAvailabilityForm();
@@ -1515,20 +1488,6 @@ function App() {
     } finally {
       setIsSubmittingAvailability(false);
     }
-  };
-
-  const handleAvailabilityEdit = (entry) => {
-    setAvailabilityForm({
-      date: entry.date || '',
-      startTime: entry.startTime || '',
-      endTime: entry.endTime || '',
-      notes: entry.notes || '',
-      changeReason: entry.changeReason || '',
-    });
-    setAvailabilityEditId(entry.id);
-    setAvailabilityEditOriginalDate(entry.date || '');
-    setError('');
-    setSupabaseStatus('');
   };
 
   const {
@@ -1543,8 +1502,6 @@ function App() {
   });
 
   const {
-    requestEdit: handleAvailabilityRequestEdit,
-    resetApproval: handleAvailabilityReset,
     deleteAvailability: handleAvailabilityDelete,
     updateStatus: handleAvailabilityStatus,
   } = useAvailabilityActions({
@@ -1554,14 +1511,11 @@ function App() {
     currentInstructor,
     approvalReasons,
     deleteRequest,
-    updateRequest,
     mapAvailabilityFromDb,
-    handleAvailabilityEdit,
     setAvailabilityEntries,
     setError,
     setSupabaseStatus,
     setDeleteRequest,
-    setUpdateRequest,
     setApprovalReasons,
   });
 
@@ -1759,6 +1713,8 @@ function App() {
           onRemoveAllowedDate={handleRemoveAllowedDate}
           availabilityForm={availabilityForm}
           onAvailabilityFormChange={handleAvailabilityFormChange}
+          onAvailabilityDateToggle={handleAvailabilityDateToggle}
+          onAvailabilityDatesSet={handleAvailabilityDatesSet}
           availabilityEditId={availabilityEditId}
           onSubmitAvailability={handleAvailabilitySubmit}
           isSubmittingAvailability={isSubmittingAvailability}
@@ -1766,15 +1722,10 @@ function App() {
           selectableAvailabilityOptions={selectableAvailabilityOptions}
           myAvailability={myAvailability}
           formatAvailabilityStatus={formatAvailabilityStatus}
-          onEditAvailability={handleAvailabilityEditAction}
-          getEditLabel={getAvailabilityEditLabel}
-          onResetApproval={handleAvailabilityReset}
           onDeleteAvailability={handleAvailabilityDeleteAction}
           getDeleteLabel={getAvailabilityDeleteLabel}
           deleteRequest={deleteRequest}
-          updateRequest={updateRequest}
           renderDeleteRequestForm={renderDeleteRequestForm}
-          renderUpdateRequestForm={renderUpdateRequestForm}
           pendingAvailability={pendingAvailability}
           approvalReasons={approvalReasons}
           onApprovalReasonChange={(entryId, value) =>
