@@ -26,6 +26,9 @@ const AvailabilityView = ({
   getDeleteLabel,
   deleteRequest,
   renderDeleteRequestForm,
+  classAssignmentOptions,
+  availabilityAssignments,
+  onAssignmentChange,
   pendingAvailability,
   approvalReasons,
   onApprovalReasonChange,
@@ -327,74 +330,105 @@ const AvailabilityView = ({
           <p className="empty">No pending availability.</p>
         ) : (
           <div className="list">
-            {pendingAvailability.map((entry) => (
-              <div key={entry.id} className="card availability-card">
-                <div>
-                  <div className="availability-card__title">
-                    <strong>{entry.instructorName || 'Instructor'}</strong>
-                    <span className={`availability-status availability-status--${entry.status}`}>
-                      {formatAvailabilityStatus(entry.status)}
-                    </span>
+            {pendingAvailability.map((entry) => {
+              const assignment = availabilityAssignments[entry.id];
+              const needsAssignment = entry.status !== 'pending_delete';
+              const isApproveDisabled =
+                needsAssignment && (!assignment?.classCategory || classAssignmentOptions.length === 0);
+              return (
+                <div key={entry.id} className="card availability-card">
+                  <div>
+                    <div className="availability-card__title">
+                      <strong>{entry.instructorName || 'Instructor'}</strong>
+                      <span className={`availability-status availability-status--${entry.status}`}>
+                        {formatAvailabilityStatus(entry.status)}
+                      </span>
+                    </div>
+                    <p className="muted">{formatAvailabilityDate(entry.date)}</p>
+                    {entry.approvalReason && (
+                      <p className="muted">Disapproval reason: {entry.approvalReason}</p>
+                    )}
+                    {entry.changeReason && (
+                      <p className="muted">Update reason: {entry.changeReason}</p>
+                    )}
+                    {entry.notes && <p className="muted">{entry.notes}</p>}
                   </div>
-                  <p className="muted">{formatAvailabilityDate(entry.date)}</p>
-                  {entry.approvalReason && (
-                    <p className="muted">Disapproval reason: {entry.approvalReason}</p>
+                  {entry.status !== 'pending_delete' && (
+                    <div className="availability-assign">
+                      <label>
+                        Assign class
+                        <select
+                          value={assignment?.classCategory || ''}
+                          onChange={(event) =>
+                            onAssignmentChange(entry.id, 'classCategory', event.target.value)
+                          }
+                          required
+                        >
+                          <option value="">Select class</option>
+                          {classAssignmentOptions.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {classAssignmentOptions.length === 0 && (
+                        <p className="muted">No classes available to assign yet.</p>
+                      )}
+                    </div>
                   )}
-                  {entry.changeReason && (
-                    <p className="muted">Update reason: {entry.changeReason}</p>
-                  )}
-                  {entry.notes && <p className="muted">{entry.notes}</p>}
+                  <div className="availability-approval">
+                    <label>
+                      Disapproval reason (required to decline)
+                      <textarea
+                        value={approvalReasons[entry.id] || ''}
+                        onChange={(event) => onApprovalReasonChange(entry.id, event.target.value)}
+                        placeholder="Why are you declining this availability?"
+                        required
+                      />
+                    </label>
+                  </div>
+                  <div className="panel__actions">
+                    {entry.status === 'pending_delete' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => onApproveAvailability(entry)}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => onDeclineAvailability(entry)}
+                        >
+                          Deny
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => onApproveAvailability(entry)}
+                          disabled={isApproveDisabled}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => onDeclineAvailability(entry)}
+                        >
+                          Decline
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="availability-approval">
-                  <label>
-                    Disapproval reason (required to decline)
-                    <textarea
-                      value={approvalReasons[entry.id] || ''}
-                      onChange={(event) => onApprovalReasonChange(entry.id, event.target.value)}
-                      placeholder="Why are you declining this availability?"
-                      required
-                    />
-                  </label>
-                </div>
-                <div className="panel__actions">
-                  {entry.status === 'pending_delete' ? (
-                    <>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => onApproveAvailability(entry)}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => onDeclineAvailability(entry)}
-                      >
-                        Deny
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => onApproveAvailability(entry)}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => onDeclineAvailability(entry)}
-                      >
-                        Decline
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

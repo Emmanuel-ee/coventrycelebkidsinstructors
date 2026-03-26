@@ -308,6 +308,7 @@ function App() {
   const [availabilityEditId, setAvailabilityEditId] = React.useState(null);
   const [isSubmittingAvailability, setIsSubmittingAvailability] = React.useState(false);
   const [isRefreshing, setIsRefreshing] = React.useState(false);
+  const [availabilityAssignments, setAvailabilityAssignments] = React.useState({});
 
   const downloadRecentAttendance = React.useCallback(async () => {
     if (!isSupabaseEnabled || !supabasePublic) {
@@ -504,6 +505,89 @@ function App() {
 
   const handleAvailabilityApproval = (entry, status) => {
     handleAvailabilityStatus(entry, status, approvalReasons[entry.id]);
+  };
+
+  const updateChildAssignmentInSupabase = async (childId, teacherId) => {
+    const updates = [{ teacher_id: teacherId }, { teacherId }];
+    for (const payload of updates) {
+      const { error: updateError } = await supabase
+        .from('children')
+        .update(payload)
+        .eq('id', childId);
+      if (!updateError) {
+        return true;
+      }
+      if (!/teacher_id|teacherid/i.test(updateError.message || '')) {
+        throw updateError;
+      }
+    }
+    return false;
+  };
+
+  const updateChildAssignmentByEmailInSupabase = async (childId, teacherEmail) => {
+    const updates = [
+      { teacher_email: teacherEmail },
+      { teacherEmail },
+      { teacheremail: teacherEmail },
+    ];
+    for (const payload of updates) {
+      const { error: updateError } = await supabase
+        .from('children')
+        .update(payload)
+        .eq('id', childId);
+      if (!updateError) {
+        return true;
+      }
+      if (!/teacher_email|teacheremail/i.test(updateError.message || '')) {
+        throw updateError;
+      }
+    }
+    return false;
+  };
+
+  const assignInstructorToClass = async (entry, assignment) => {
+    if (!assignment?.classCategory) {
+      setError('Please select a class before approving availability.');
+      return false;
+    }
+    const targetChildren = records.children.filter(
+      (child) => (child.classCategory?.trim() || 'Unassigned') === assignment.classCategory
+    );
+    const teacherRecord = records.teachers.find((teacher) => teacher.id === entry.instructorId);
+    const instructorEmail = teacherRecord?.email || '';
+    if (isSupabaseEnabled) {
+      setError('');
+      setSupabaseStatus('');
+      for (const child of targetChildren) {
+        try {
+          const ok = isUuid(entry.instructorId)
+            ? await updateChildAssignmentInSupabase(child.id, entry.instructorId)
+            : instructorEmail
+              ? await updateChildAssignmentByEmailInSupabase(child.id, instructorEmail)
+              : false;
+          if (!ok) {
+            setError(
+              isUuid(entry.instructorId)
+                ? 'Unable to assign instructor. Check child update policy.'
+                : 'Unable to assign instructor. Ensure the instructor has an email address.'
+            );
+            return false;
+          }
+        } catch (updateError) {
+          setError(`Unable to assign instructor. ${updateError.message}`);
+          return false;
+        }
+      }
+    }
+    setRecords((prev) => ({
+      ...prev,
+      children: prev.children.map((child) =>
+        (child.classCategory?.trim() || 'Unassigned') === assignment.classCategory
+          ? { ...child, teacherId: entry.instructorId }
+          : child
+      ),
+    }));
+    return true;
   };
 
   const renderDeleteRequestForm = (entry) => (
@@ -889,7 +973,7 @@ function App() {
       }
     }
     if (!instructor) {
-      setError('No instructor found with that email.');
+      setError('email or password is incorrect.');
       return;
     }
     if (!instructor.verified) {
@@ -901,7 +985,7 @@ function App() {
       passwordMatches = await bcrypt.compare(loginForm.password, instructor.passwordHash);
     }
     if (!passwordMatches) {
-      setError('Incorrect password.');
+      setError('email or password is incorrect.');
       return;
     }
     setCurrentInstructor(instructor);
@@ -1532,6 +1616,21 @@ function App() {
     selectedTeacher,
   });
 
+  const classAssignmentOptions = React.useMemo(
+    () => classOptions.filter((option) => option !== 'all'),
+    [classOptions]
+  );
+
+  const handleAssignmentChange = (entryId, field, value) => {
+    setAvailabilityAssignments((prev) => ({
+      ...prev,
+      [entryId]: {
+        classCategory: prev[entryId]?.classCategory || '',
+        [field]: value,
+      },
+    }));
+  };
+
   const { approvedAvailability, approvedAvailabilityCalendar } = useAvailabilityCalendar(
     availabilityEntries
   );
@@ -1551,8 +1650,18 @@ function App() {
     setView('profile');
   };
 
-  const handleApproveAvailabilityEntry = (entry) =>
+  const handleApproveAvailabilityEntry = async (entry) => {
+    if (entry.status === 'pending_delete') {
+      handleAvailabilityApproval(entry, 'approved');
+      return;
+    }
+    const assignment = availabilityAssignments[entry.id];
+    const didAssign = await assignInstructorToClass(entry, assignment);
+    if (!didAssign) {
+      return;
+    }
     handleAvailabilityApproval(entry, 'approved');
+  };
   const handleDeclineAvailabilityEntry = (entry) =>
     handleAvailabilityApproval(entry, 'declined');
 
@@ -1726,6 +1835,9 @@ function App() {
           getDeleteLabel={getAvailabilityDeleteLabel}
           deleteRequest={deleteRequest}
           renderDeleteRequestForm={renderDeleteRequestForm}
+          classAssignmentOptions={classAssignmentOptions}
+          availabilityAssignments={availabilityAssignments}
+          onAssignmentChange={handleAssignmentChange}
           pendingAvailability={pendingAvailability}
           approvalReasons={approvalReasons}
           onApprovalReasonChange={(entryId, value) =>

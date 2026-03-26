@@ -391,6 +391,18 @@
   font-size: 0.8rem;
 }
 
+.availability-assign {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.availability-assign label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
 .availability-delete label {
   display: grid;
   gap: 6px;
